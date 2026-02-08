@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>音と詩集：太陽フレアは陽光になりたい</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<div id="app">
+  <div id="frame">
+    <div id="stage">
+  <img id="bg-sketch" src="assets/sketch.webp" alt="">
+  <img id="bg-desk" src="assets/desk_on.webp" alt="">
+    </div>
+
+    <div id="fade-black"></div>
+
+    <img id="title" src="assets/title.webp" alt="title">
+
+    <div id="hit-layer">
+      <button class="hit" id="hit-lamp" type="button"></button>
+      <button class="hit" id="hit-book" type="button"></button>
+      <button class="hit" id="hit-radio" type="button"></button>
+      <button class="hit" id="hit-coffee" type="button"></button>
+    </div>
+
+<!-- COFFEE 演出レイヤー（最初は非表示） -->
+<div id="coffee-fx" hidden inert>
+  <img id="coffee-steam" alt="">
+  <div id="coffee-banner">
+    <img id="coffee-banner-img" alt="">
+    <p id="coffee-banner-text"></p>
+  </div>
+</div>
+
+<!-- BOOK画面（最初は非表示） -->
+<div id="book-scene" hidden inert>
+
+  <!-- 背景 -->
+  <img id="book-bg" alt="">
+
+  <!-- ✅ 挿絵の固定枠（白い紙エリア） -->
+  <div id="book-ill-wrap" aria-hidden="true">
+    <canvas id="book-ill-canvas" hidden></canvas>
+    <img id="book-ill" alt="">
+  </div>
+  
+  <img id="book-pageflip" alt="">
+  <div id="book-fade"></div>
+  <img id="book-blink" alt="">
+
+  <!-- 詩テキスト（縦書き） -->
+  <div id="book-text">
+    <div class="poem-vertical" id="poem-area"></div>
+  </div>
+
+  <!-- 操作UI -->
+  <button id="book-prev" type="button" aria-label="previous"></button>
+  <button id="book-next" type="button" aria-label="next"></button>
+  <button id="book-close" type="button" aria-label="close"></button>
+</div>
+
+<!-- RADIO画面（最初は非表示） -->
+<div id="radio-scene" hidden inert>
+  <!-- 下：目盛り -->
+  <img id="radio-scale" alt="">
+
+  <!-- 中：ラジオ本体（背景） -->
+  <img id="radio-bg" alt="">
+
+  <!-- 上：操作パーツ -->
+  <img id="radio-channel" alt="" draggable="false">
+  <img id="radio-volume" alt="" draggable="false">
+
+  <!-- スイッチ（クリック） -->
+  <button id="radio-switch" type="button" aria-label="radio switch"></button>
+
+  <!-- 音量表示（ONの時だけ出す） -->
+  <div id="radio-volume-label" aria-hidden="true">音量：0%</div>
+
+  <!-- 閉じる -->
+  <button id="radio-close" type="button" aria-label="close"></button>
+
+  <!-- 音（DOMに置いておく） -->
+  <audio id="audio-noise" src="assets/noise.mp3" loop preload="auto"></audio>
+  <audio id="audio-music" preload="auto"></audio>
+</div>
+  </div>
+</div>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

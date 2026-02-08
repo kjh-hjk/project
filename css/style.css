@@ -1,0 +1,559 @@
+/* =====================
+   Base
+===================== */
+html, body {
+  height: 100%;
+  margin: 0;
+  background: #000;
+}
+
+@font-face {
+  font-family: "CineCaption226";
+  src: url("../assets/cinecaption226.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+body {
+  font-family: "CineCaption226", sans-serif;
+}
+
+:root { --s: 1; } /* JSで上書きされる */
+
+
+/* hidden属性は確実に非表示（JSの .hidden 制御と同期） */
+[hidden] { display: none !important; }
+
+/* =====================
+   App / Frame Layout
+===================== */
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  overflow: hidden;
+}
+
+/* 16:9フレーム */
+#frame {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+}
+
+/* frame内で重ねるレイヤー */
+#stage,
+#title,
+#hit-layer,
+#fade-black,
+#coffee-fx,
+#book-scene,
+#radio-scene {
+  position: absolute;
+  inset: 0;
+}
+
+/* =====================
+   Stage (Background Images)
+===================== */
+#stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 初期：sketchは少しぼかし */
+#bg-sketch {
+  opacity: 1;
+  filter: blur(3px);
+  transition: filter 1.2s ease, opacity 2.0s ease;
+}
+
+/* 初期：deskは非表示、後でフェードイン */
+#bg-desk {
+  opacity: 0;
+  transition: opacity 2.2s ease;
+}
+
+/* =====================
+   Fade Black (Lamp)
+===================== */
+#fade-black {
+  background: #000;
+  opacity: 0;
+  pointer-events: none;   /* 透明でもクリック吸わない */
+  transition: opacity 0.9s ease;
+  z-index: 50;
+}
+
+/* =====================
+   Title
+===================== */
+#title {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  opacity: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: opacity 1.6s ease;
+  z-index: 60;
+}
+
+/* =====================
+   Hit Layer (Desk Hotspots)
+===================== */
+/* 初期は無効（desk表示後に #frame.interactive で有効化） */
+#hit-layer {
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 70; /* deskの上で確実にクリックを取る */
+}
+
+/* desk表示後だけ有効 */
+#frame.interactive #hit-layer {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* 透明ボタン */
+.hit {
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ヒット範囲（あなたの値を踏襲） */
+#hit-lamp {
+  left: 57.40%;
+  top: 0.00%;
+  width: 28.49%;
+  height: 50.00%;
+}
+
+#hit-radio {
+  left: 20.10%;
+  top: 2.04%;
+  width: 26.35%;
+  height: 47.96%;
+}
+
+#hit-book {
+  left: 18.65%;
+  top: 53.52%;
+  width: 45.52%;
+  height: 39.44%;
+}
+
+#hit-coffee {
+  left: 75.83%;
+  top: 50.09%;
+  width: 16.51%;
+  height: 27.22%;
+}
+
+/* =====================
+   Coffee FX (Overlay)
+===================== */
+/* 演出レイヤーはクリック邪魔しない */
+#coffee-fx {
+  z-index: 65;          /* deskより上 / hit-layerより下（クリックはhit-layerで取る） */
+  pointer-events: none; /* 演出はクリックを邪魔しない */
+}
+
+#coffee-steam {
+  position: absolute;
+  left: 74.90%;
+  top: 32.69%;
+  width: 15.63%;
+  height: 27.78%;
+  opacity: 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+#coffee-banner {
+  position: absolute;
+  left: 60%;
+  top: 74%;
+  width: 35%;
+  height: 20%;
+  display: none;
+}
+
+#coffee-banner-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+#coffee-banner-text {
+  font-family: "CineCaption226", sans-serif;
+  font-size: 20px;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6% 8%;
+  line-height: 1.2;
+  color: #000;
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+/* =====================
+   Radio Scene (Overlay)
+===================== */
+#radio-scene{
+  position: absolute;
+  inset: 0;
+  z-index: 92;
+  overflow: hidden;   /* ✅ 目盛りのはみ出しを切る */
+  pointer-events: auto;
+}
+
+/* ラジオ内のimg共通（全画面inset:0はしない） */
+#radio-scene img{
+  position: absolute;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* 背景（ラジオopen背景はフル） */
+#radio-bg{
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;     /* 1920x1080ぴったりなら cover でOK */
+  object-position: center;
+  z-index: 94;
+}
+
+/* 目盛り（クリップされる） */
+#radio-scale{
+  left:   calc(409px * var(--s));
+  top:    calc(80px  * var(--s));     /* ✅ 最小入力時のY */
+  width:  calc(1000px * var(--s));
+  height: calc(1150px * var(--s));
+  object-fit: contain;
+  object-position: left top;
+  z-index: 93;
+
+  /* JSが --radio-scale-y に「-805〜0」を入れる（数値） */
+  transform: translateY(calc(var(--radio-scale-y, 0) * 1px * var(--s)));
+}
+
+/* チャンネルノブ */
+#radio-channel{
+  left:   calc(747px * var(--s));
+  top:    calc(291px * var(--s));
+  width:  calc(400px * var(--s));
+  height: calc(400px * var(--s));
+  object-fit: contain;
+  object-position: center;
+  z-index: 95;
+
+  pointer-events: auto;
+  transform-origin: 50% 50%;
+  transform: rotate(var(--radio-channel-deg, 0deg));
+  touch-action: none;
+}
+
+/* ボリュームノブ */
+#radio-volume{
+  left:   calc(1027px * var(--s));
+  top:    calc(48px * var(--s));
+  width:  calc(400px * var(--s));
+  height: calc(400px * var(--s));
+  object-fit: contain;
+  object-position: center;
+  z-index: 95;
+
+  pointer-events: auto;
+  transform-origin: 50% 50%;
+  transform: rotate(var(--radio-volume-deg, 0deg));
+  touch-action: none;
+}
+
+/* ✅ ノブだけクリック/ドラッグ可能にする（詳細度で勝つ） */
+#radio-scene #radio-channel,
+#radio-scene #radio-volume{
+  pointer-events: auto;
+}
+
+/* スイッチ（ボタンの当たり判定）
+   ※位置はJSで on/off で変える（下で指示） */
+#radio-switch{
+  position: absolute;
+  z-index: 96;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+
+  left:   calc(var(--radio-switch-x, 505) * 1px * var(--s));
+  top:    calc(var(--radio-switch-y, 435) * 1px * var(--s));
+  width:  calc(250px * var(--s));
+  height: calc(250px * var(--s));
+
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center;
+}
+
+/* 音量表示（ONの時だけ出す） */
+#radio-volume-label{
+  position: absolute;
+  z-index: 97;
+  pointer-events: none;
+
+  left: calc(1189px * var(--s));
+  top:  calc(517px * var(--s));
+  transform: translate(-50%, -50%);
+
+  font-size: calc(26px * var(--s));
+  color: #111;
+
+  /* 中央寄せ */
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 閉じる（×） */
+#radio-close{
+  position: absolute;
+  z-index: 98;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+
+  left:   calc(1670px * var(--s));
+  top:    calc(-15px * var(--s));
+  width:  calc(250px * var(--s));
+  height: calc(250px * var(--s));
+
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center;
+}
+
+
+/* =====================
+   Book Scene (Overlay)
+===================== */
+#book-scene {
+  z-index: 90; /* bookが最前面 */
+  /* display:none は書かない（hidden属性で制御） */
+}
+
+/* 背景 */
+#book-bg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: none;
+  -webkit-filter: none;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* まばたき中：背景＋文字＋挿絵を全部ぼかす */
+#book-scene.blinking #book-bg,
+#book-scene.blinking #book-ill,
+#book-scene.blinking #book-text,
+#book-scene.blinking #book-ill-canvas {
+  filter: blur(calc(4px * var(--s)));
+  -webkit-filter: blur(calc(4px * var(--s)));
+}
+
+/* ページめくり（中央寄せ） */
+#book-pageflip {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  width: auto;
+  margin: auto;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 96;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* まばたき画像 */
+#book-blink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 97;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* フェード（暗転） */
+#book-fade {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 98;
+  transition: opacity 600ms ease;
+}
+
+/* UI（矢印・閉じる） */
+#book-close {
+  position: absolute;
+  left: 86.98%;
+  top: -1.39%;
+  width: 13.02%;
+  height: 23.15%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  z-index: 99;
+}
+
+#book-prev,
+#book-next {
+  position: absolute;
+  top: 31.57%;
+  width: 13.02%;
+  height: 23.15%;
+  background-color: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  z-index: 99;
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center;
+}
+
+#book-prev { left: -0.73%; }
+#book-next { left: 88.23%; }
+
+/* 詩テキスト領域 */
+/* 右ページだけをテキスト領域にする */
+/* 右ページの外側（右端）から始める */
+/* 右ページ本文エリア（1920x1080基準で固定 → var(--s) で追従） */
+#book-text{
+  position: absolute;
+  z-index: 95;
+  pointer-events: none;
+
+  left: auto !important;
+
+  top:    calc(220px * var(--s));
+  right:  calc(160px * var(--s));
+  width:  calc(520px * var(--s));
+  height: calc(760px * var(--s));
+
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* 縦書き本文（サイズもスケール追従） */
+.poem-vertical{
+  position: absolute;                 /* ★追加 */
+  top: 0;                             /* ★追加：上端固定 */
+  right: calc(120px * var(--s));       /* ★追加：開始列の固定位置（調整ポイント） */
+
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+
+  white-space: pre-wrap;
+  line-break: strict;
+
+  font-size: calc(22px * var(--s));
+  line-height: 1.9;
+  letter-spacing: 0.01em;
+  color: #111;
+}
+
+/* ✅ 挿絵の固定枠（本の白い紙エリア） */
+#book-ill-wrap{
+  position: absolute;
+  z-index: 93;           /* 背景より上、文字より下寄りにしたいなら93〜94 */
+  pointer-events: none;  /* 通常は触らない。JSでcanvasだけ触れるようにする */
+
+  /* あなたが JS の bounds で使っている白エリア（1920x1080基準） */
+  left:   calc(228px * var(--s));
+  top:    calc(129px * var(--s));
+  width:  calc(1453px * var(--s));
+  height: calc(854px  * var(--s));
+}
+
+
+/* 挿絵（画像）: wrap内で100% */
+#book-ill{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  z-index: 1;            /* wrap内の重なり。canvasより下なら1でOK */
+  opacity: 0;
+  transition: opacity 300ms ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+
+/* タッチ端末のハイライト抑制（任意） */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+#book-ill-canvas{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 94;
+  pointer-events:auto;
+  touch-action:none;
+  display: block;
+
+  /* dither/ascii をシャキッと */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+
+#book-ill-canvas[hidden] { display: none; }
+
