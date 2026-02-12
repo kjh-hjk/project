@@ -207,19 +207,27 @@ body {
 
 #coffee-banner-text {
   font-family: "CineCaption226", sans-serif;
-  font-size: 20px;
+
+  /* ✅ 1920基準で追従 */
+  font-size: calc(30px * var(--s));
+  line-height: calc(1.2 * 1); /* line-heightは倍率なのでそのままでOK */
+
   position: absolute;
   inset: 0;
   margin: 0;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6% 8%;
-  line-height: 1.2;
+
+  /* ✅ paddingもスケールさせたい場合（おすすめ） */
+  padding: calc(24px * var(--s)) calc(32px * var(--s));
+
   color: #000;
   text-align: center;
   white-space: pre-wrap;
 }
+
 
 /* =====================
    Radio Scene (Overlay)
