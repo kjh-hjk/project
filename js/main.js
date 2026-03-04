@@ -62,6 +62,8 @@ function startLeafFade(idx) {
   leafFade.startAt = performance.now();
 }
 
+let p14RandomIll = null; // "ripple" | "fireworks" | null
+
 // =====================
 // DOM参照
 // =====================
@@ -88,7 +90,9 @@ const bookPageflip = document.getElementById("book-pageflip");
 
 const poemArea = document.getElementById("poem-area");
 const bookTextEl = document.getElementById("book-text");
-const bookIll = document.getElementById("book-ill");
+const illCanvas  = document.getElementById("book-ill-canvas");
+const illCanvas2 = document.getElementById("book-ill-canvas2"); // ★追加
+const bookIll    = document.getElementById("book-ill");
 
 const coffeeFx = document.getElementById("coffee-fx");
 const coffeeSteam = document.getElementById("coffee-steam");
@@ -107,8 +111,6 @@ const radioVolLabel = document.getElementById("radio-volume-label");
 
 const audioNoise = document.getElementById("audio-noise");
 const audioMusic = document.getElementById("audio-music");
-
-const illCanvas = document.getElementById("book-ill-canvas");
 
 // =====================
 // 画像を先読み
@@ -3493,6 +3495,719 @@ function drawFlameWarp(img, rectD, wigglePxDesign) {
 })();
 
 // =====================
+// WaterRippleEngine
+// - クリック位置に水紋を生成（複数同時）
+// - mode: "dither" | "ascii"
+// =====================
+const WaterRippleEngine = (function () {
+  let active = false;
+  let outCanvas = null, outCtx = null;
+
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  // white frame mapping
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  // ripple list
+  // {xD, yD, born, life, r0, r1, rings, seed}
+  const ripples = [];
+
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { x: lx * sx, y: ly * sy };
+  }
+
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { xD: pxRaw / sx + CROP_X, yD: pyRaw / sy + CROP_Y };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+    const dpr = getFixedDpr();
+
+    const BASE_W = 1453, BASE_H = 854;
+    const w = Math.round(BASE_W * dpr);
+    const h = Math.round(BASE_H * dpr);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w; outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw; rawCanvas.height = rh;
+    }
+
+    if (tmpCanvas.width !== w || tmpCanvas.height !== h) {
+      tmpCanvas.width = w; tmpCanvas.height = h;
+    }
+  }
+
+  // ===== FX（あなたの他エンジンと同じ）=====
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx, ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+
+  function applyCoarseDotDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+    const DOT = 3;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        const ink = (lum < 0.6);
+        if (ink && isDot) stampDot(d, w, h, x, y, DOT);
+        else d[i + 3] = 0;
+      }
+    }
+    ctxSrc.putImageData(im, 0, 0);
+  }
+
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 10;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols; tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.6px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+    const CHARSET = "⋅:;~+=*x○";
+    const inkThreshold = 0.02;
+
+    ctxOut.clearRect(0, 0, outW, outH);
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const fontSize = Math.floor(cell * 1.05);
+    ctxOut.font = `520 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        if (im[i + 3] < 10) continue;
+
+        const r = im[i], g = im[i + 1], b = im[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const ink = 1 - lum;
+        if (ink < inkThreshold) continue;
+
+        const rr = hash01(x + 19, y + 73);
+        const ch = CHARSET[Math.floor(rr * CHARSET.length)];
+
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+        ctxOut.fillText(ch, cx, cy);
+      }
+    }
+  }
+
+  // ===== water ripple drawing =====
+  function addRipple(xD, yD) {
+    const now = performance.now();
+    ripples.push({
+      xD, yD,
+      born: now,
+      life: 1400 + Math.random() * 600, // ms
+      r0: 8 + Math.random() * 10,       // start radius (design px)
+      r1: 260 + Math.random() * 160,    // end radius (design px)
+      rings: 3 + Math.floor(Math.random() * 3), // 3..5
+      seed: Math.random() * Math.PI * 2
+    });
+  }
+
+  function easeOutCubic(t){
+    t = clamp01(t);
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  function drawRaw() {
+    rawCtx.clearRect(0, 0, rawCanvas.width, rawCanvas.height);
+
+    const now = performance.now();
+
+    // 常に少しだけ“水面の呼吸”（うっすら）
+    const breathe = 0.12 + 0.08 * Math.sin(now * 0.0012);
+
+    rawCtx.save();
+    rawCtx.strokeStyle = "#000";
+    rawCtx.lineCap = "round";
+    rawCtx.lineJoin = "round";
+
+    // dither/asciiで欠けにくいよう少し太め
+    const lw = Math.max(2, Math.round(3.0 * (rawCanvas.width / 1920)));
+    rawCtx.lineWidth = lw;
+
+    // 更新 + 描画
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const rp = ripples[i];
+      const t = (now - rp.born) / rp.life;
+      if (t >= 1) { ripples.splice(i, 1); continue; }
+
+      const k = easeOutCubic(t);
+      const baseR = rp.r0 + (rp.r1 - rp.r0) * k;
+
+      // 波紋の強さ（中心ほど強め→消える）
+      const a = (1 - k) * (0.75 + breathe);
+
+      const center = designToRaw(rp.xD, rp.yD);
+      const scaleX = rawCanvas.width / CROP_W; // design->raw
+      const R = baseR * scaleX;
+
+      // 複数リング（間隔を少し揺らす）
+      for (let n = 0; n < rp.rings; n++) {
+        const rr = (n / rp.rings);
+        const wobble = Math.sin(now * 0.004 + rp.seed + n * 1.3) * (2.0 + rr * 3.0);
+        const ringR = R * (0.65 + rr * 0.55) + wobble;
+
+        // リングごとに薄く
+        rawCtx.globalAlpha = a * (1 - rr) * 0.9;
+
+        rawCtx.beginPath();
+        rawCtx.arc(center.x, center.y, Math.max(1, ringR), 0, Math.PI * 2);
+        rawCtx.stroke();
+      }
+    }
+
+    rawCtx.restore();
+    rawCtx.globalAlpha = 1;
+  }
+
+  function drawFx() {
+    if (!outCtx || !outCanvas) return;
+
+    const outW = outCanvas.width;
+    const outH = outCanvas.height;
+
+    tmpCtx.imageSmoothingEnabled = false;
+    tmpCtx.clearRect(0, 0, outW, outH);
+    tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+    if (mode === "dither") {
+      outCtx.clearRect(0, 0, outW, outH);
+      applyCoarseDotDither(tmpCtx, outW, outH, 3);
+      outCtx.drawImage(tmpCanvas, 0, 0);
+      return;
+    }
+
+    if (mode === "ascii") {
+      const now = performance.now();
+      const interval = 1000 / asciiFps;
+      if (now - lastAsciiAt < interval) return;
+      lastAsciiAt = now;
+      renderAsciiInk(tmpCtx, outW, outH, outCtx, outW, outH);
+      return;
+    }
+  }
+
+  function tick() {
+    if (!active) return;
+    drawRaw();
+    drawFx();
+    raf = requestAnimationFrame(tick);
+  }
+
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  function bindPointer() {
+    if (!outCanvas) return;
+
+    function onDown(e) {
+      if (!active) return;
+      const p = canvasPointFromEvent(e, outCanvas);
+      const px = p.x * fxScale;
+      const py = p.y * fxScale;
+
+      const d = rawToDesign(px, py);
+      addRipple(d.xD, d.yD);
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    bindPointer._onDown = onDown;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas) return;
+    if (bindPointer._onDown) {
+      outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+      bindPointer._onDown = null;
+    }
+  }
+
+  return {
+    async start(canvasEl, opts) {
+      this.stop();
+
+      outCanvas = canvasEl;
+      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+      mode = opts?.mode || "dither";
+      fxScale = (typeof opts?.fxScale === "number") ? opts.fxScale : 0.55;
+      asciiFps = (typeof opts?.asciiFps === "number") ? opts.asciiFps : 12;
+
+      ripples.length = 0;
+      lastAsciiAt = 0;
+
+      resizeCanvases();
+      bindPointer();
+
+      active = true;
+      raf = requestAnimationFrame(tick);
+    },
+
+    stop() {
+      active = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+
+      unbindPointer();
+
+      if (outCtx && outCanvas) {
+        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+      }
+      ripples.length = 0;
+
+      outCanvas = null; outCtx = null;
+    },
+
+    setMode(nextMode) {
+      mode = nextMode || "dither";
+      lastAsciiAt = 0;
+    },
+
+    resize() { /* 固定レンダーなので何もしない */ },
+
+    get active() { return active; }
+  };
+})();
+
+// =====================
+// FireworksEngine
+// - クリック位置で花火（複数同時）
+// - mode: "dither" | "ascii"
+// =====================
+const FireworksEngine = (function () {
+  let active = false;
+  let outCanvas = null, outCtx = null;
+
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { x: lx * sx, y: ly * sy };
+  }
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { xD: pxRaw / sx + CROP_X, yD: pyRaw / sy + CROP_Y };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+    const dpr = getFixedDpr();
+
+    const BASE_W = 1453, BASE_H = 854;
+    const w = Math.round(BASE_W * dpr);
+    const h = Math.round(BASE_H * dpr);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w; outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw; rawCanvas.height = rh;
+    }
+
+    if (tmpCanvas.width !== w || tmpCanvas.height !== h) {
+      tmpCanvas.width = w; tmpCanvas.height = h;
+    }
+  }
+
+  // ===== FX（あなたの他エンジンと同じ）=====
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx, ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+  function applyCoarseDotDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+    const DOT = 3;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        const ink = (lum < 0.6);
+        if (ink && isDot) stampDot(d, w, h, x, y, DOT);
+        else d[i + 3] = 0;
+      }
+    }
+    ctxSrc.putImageData(im, 0, 0);
+  }
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+  function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 10;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols; tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.55px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+    const CHARSET = "x+*.:;-=~o";
+    const inkThreshold = 0.02;
+
+    ctxOut.clearRect(0, 0, outW, outH);
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const fontSize = Math.floor(cell * 1.05);
+    ctxOut.font = `550 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        if (im[i + 3] < 10) continue;
+
+        const r = im[i], g = im[i + 1], b = im[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const ink = 1 - lum;
+        if (ink < inkThreshold) continue;
+
+        const rr = hash01(x + 19, y + 73);
+        const ch = CHARSET[Math.floor(rr * CHARSET.length)];
+
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+        ctxOut.fillText(ch, cx, cy);
+      }
+    }
+  }
+
+  // ===== fireworks simulation =====
+  const bursts = [];
+  // burst: {xD,yD,born,life,parts:[{x,y,vx,vy,ttl,seed}]}
+
+  function addBurst(xD, yD) {
+    const now = performance.now();
+    const parts = [];
+    const N = 48 + Math.floor(Math.random() * 28); // 48..75
+
+    for (let i = 0; i < N; i++) {
+      const ang = (i / N) * Math.PI * 2 + (Math.random() * 0.18);
+      const sp = 220 + Math.random() * 220; // design px/sec
+      parts.push({
+        x: xD, y: yD,
+        vx: Math.cos(ang) * sp,
+        vy: Math.sin(ang) * sp,
+        ttl: 900 + Math.random() * 650,
+        seed: Math.random() * Math.PI * 2
+      });
+    }
+
+    bursts.push({
+      xD, yD,
+      born: now,
+      life: 1400 + Math.random() * 500,
+      parts
+    });
+  }
+
+  function drawRaw() {
+    rawCtx.clearRect(0, 0, rawCanvas.width, rawCanvas.height);
+    const now = performance.now();
+
+    rawCtx.save();
+    rawCtx.strokeStyle = "#000";
+    rawCtx.lineCap = "round";
+    rawCtx.lineJoin = "round";
+
+    // 少し太め（変換で欠けにくい）
+    const lw = Math.max(2, Math.round(3.0 * (rawCanvas.width / 1920)));
+    rawCtx.lineWidth = lw;
+
+    // dt（固定tickじゃないので、描画内で短時間更新）
+    // “軽い見た目”にしたいので 16ms 相当で1回だけ進める
+    const dt = 0.016;
+
+    for (let bi = bursts.length - 1; bi >= 0; bi--) {
+      const b = bursts[bi];
+      const t = (now - b.born) / b.life;
+      if (t >= 1) { bursts.splice(bi, 1); continue; }
+
+      // 全体フェード
+      const fade = (1 - t);
+
+      // 粒
+      for (let pi = b.parts.length - 1; pi >= 0; pi--) {
+        const p = b.parts[pi];
+        const age = (now - b.born);
+        if (age > p.ttl) { b.parts.splice(pi, 1); continue; }
+
+        // physics（design座標で更新）
+        const drag = 0.985;
+        const g = 420; // design px/sec^2（落下）
+        p.vx *= drag;
+        p.vy = p.vy * drag + g * dt;
+
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+
+        // sparkle（ちょい瞬き）
+        const tw = 0.75 + 0.25 * Math.sin(now * 0.012 + p.seed);
+
+        const a = fade * (1 - age / p.ttl) * tw;
+        rawCtx.globalAlpha = a;
+
+        const aR = designToRaw(p.x, p.y);
+        // “線花火”っぽく、進行方向に短い線分
+        const vx = p.vx, vy = p.vy;
+        const vlen = Math.sqrt(vx * vx + vy * vy) || 1;
+
+        const tailD = 10 + 18 * (1 - age / p.ttl); // design px
+        const tailRaw = tailD * (rawCanvas.width / CROP_W);
+
+        const tx = aR.x - (vx / vlen) * tailRaw;
+        const ty = aR.y - (vy / vlen) * tailRaw;
+
+        rawCtx.beginPath();
+        rawCtx.moveTo(tx, ty);
+        rawCtx.lineTo(aR.x, aR.y);
+        rawCtx.stroke();
+      }
+
+      // 破片がなくなったら終わり
+      if (b.parts.length === 0) bursts.splice(bi, 1);
+    }
+
+    rawCtx.restore();
+    rawCtx.globalAlpha = 1;
+  }
+
+  function drawFx() {
+    if (!outCtx || !outCanvas) return;
+
+    const outW = outCanvas.width;
+    const outH = outCanvas.height;
+
+    tmpCtx.imageSmoothingEnabled = false;
+    tmpCtx.clearRect(0, 0, outW, outH);
+    tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+    if (mode === "dither") {
+      outCtx.clearRect(0, 0, outW, outH);
+      applyCoarseDotDither(tmpCtx, outW, outH, 3);
+      outCtx.drawImage(tmpCanvas, 0, 0);
+      return;
+    }
+
+    if (mode === "ascii") {
+      const now = performance.now();
+      const interval = 1000 / asciiFps;
+      if (now - lastAsciiAt < interval) return;
+      lastAsciiAt = now;
+      renderAsciiInk(tmpCtx, outW, outH, outCtx, outW, outH);
+      return;
+    }
+  }
+
+  function tick() {
+    if (!active) return;
+    drawRaw();
+    drawFx();
+    raf = requestAnimationFrame(tick);
+  }
+
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  function bindPointer() {
+    if (!outCanvas) return;
+
+    function onDown(e) {
+      if (!active) return;
+      const p = canvasPointFromEvent(e, outCanvas);
+      const px = p.x * fxScale;
+      const py = p.y * fxScale;
+
+      const d = rawToDesign(px, py);
+      addBurst(d.xD, d.yD);
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    bindPointer._onDown = onDown;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas) return;
+    if (bindPointer._onDown) {
+      outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+      bindPointer._onDown = null;
+    }
+  }
+
+  return {
+    async start(canvasEl, opts) {
+      this.stop();
+
+      outCanvas = canvasEl;
+      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+      mode = opts?.mode || "dither";
+      fxScale = (typeof opts?.fxScale === "number") ? opts.fxScale : 0.55;
+      asciiFps = (typeof opts?.asciiFps === "number") ? opts.asciiFps : 12;
+
+      bursts.length = 0;
+      lastAsciiAt = 0;
+
+      resizeCanvases();
+      bindPointer();
+
+      active = true;
+      raf = requestAnimationFrame(tick);
+    },
+
+    stop() {
+      active = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+
+      unbindPointer();
+
+      if (outCtx && outCanvas) {
+        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+      }
+      bursts.length = 0;
+
+      outCanvas = null; outCtx = null;
+    },
+
+    setMode(nextMode) {
+      mode = nextMode || "dither";
+      lastAsciiAt = 0;
+    },
+
+    resize() { /* 固定レンダーなので何もしない */ },
+
+    get active() { return active; }
+  };
+})();
+
+// =====================
 // LeafWingEngine
 // - stem + leaf1..9 を配置
 // - 葉クリックで消える（セッション中ずっと保持）
@@ -4548,7 +5263,7 @@ const PAGES = {
   },
   14: {
     bg: "open",
-    ill: "ill_09",
+    ill: "ripple_fireworks",
     text: `白、黒、白、黒
 ここに青を置いてみる
 なんて冗談を言って見たりして
@@ -4804,8 +5519,14 @@ function closeBook() {
   OxGameEngine.stop();
   StringBundleEngine.stop();
   BoxSpidersEngine.stop();
+  CandleEngine.stop();
+  LeafWingEngine.stop();
+  IllEngine.stop();
+  WaterRippleEngine.stop();
+  FireworksEngine.stop();
   IllEngine.stop();
   if (illCanvas) illCanvas.hidden = true;
+  if (illCanvas2) illCanvas2.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -4909,6 +5630,11 @@ function renderBookPage() {
 
   const page = PAGES[bookPage] || {};
 
+  // 14ページ以外にいる時は抽選をリセット
+  if (bookPage !== 14) {
+    p14RandomIll = null;
+  }
+
   // 矢印（今まで通り）
   if (bookPrev) bookPrev.style.backgroundImage = 'url("' + getAsset("book", "left") + '")';
   if (bookNext) bookNext.style.backgroundImage = 'url("' + getAsset("book", "right") + '")';
@@ -4939,21 +5665,93 @@ function renderBookPage() {
   }
 
   // ✅ 挿絵（renderBookPage の中）
-  if (illCanvas) {
-    // まず止めて消す（残像・他ページ残り防止）
-    EyeHandEngine.stop();
-    OxGameEngine.stop();
-    StringBundleEngine.stop();
-    IllEngine.stop();
-    BoxSpidersEngine.stop();
-    CandleEngine.stop();
-    LeafWingEngine.stop();
+if (illCanvas) {
+  // まず止めて消す（残像・他ページ残り防止）
+  EyeHandEngine.stop();
+  OxGameEngine.stop();
+  StringBundleEngine.stop();
+  IllEngine.stop();
+  BoxSpidersEngine.stop();
+  CandleEngine.stop();
+  LeafWingEngine.stop();
+  WaterRippleEngine.stop();
+  FireworksEngine.stop();
 
-    if (bookIll) bookIll.src = "";
+  if (bookIll) bookIll.src = "";
 
-    // いったん完全に隠す＋クリック無効
-    illCanvas.hidden = true;
-    illCanvas.style.pointerEvents = "none";
+  // 2枚とも隠す
+  illCanvas.hidden = true;
+  illCanvas.style.pointerEvents = "none";
+  if (illCanvas2) {
+    illCanvas2.hidden = true;
+    illCanvas2.style.pointerEvents = "none";
+  }
+
+  // 花火→水紋のクリック転送が残ってたら剥がす
+  if (illCanvas2 && illCanvas2._forwardToRipple) {
+    illCanvas2.removeEventListener("pointerdown", illCanvas2._forwardToRipple);
+    illCanvas2._forwardToRipple = null;
+  }
+
+    const mode = lampOn ? "dither" : "ascii";
+
+  // -------------------------
+  // ★14ページ：水紋 or 花火（ランダムで片方だけ）
+  // -------------------------
+  if (page.ill === "ripple_fireworks") {
+
+    // 14ページに入った瞬間だけ抽選（開いてる間は固定）
+    if (p14RandomIll === null) {
+      p14RandomIll = (Math.random() < 0.5) ? "ripple" : "fireworks";
+    }
+
+    if (p14RandomIll === "ripple") {
+      // 水紋だけ
+      illCanvas.hidden = false;
+      illCanvas.style.pointerEvents = "auto"; // 水紋クリックしたいならauto
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          WaterRippleEngine.start(illCanvas, { mode, fxScale: 0.55, asciiFps: 12 })
+            .catch(console.error);
+        });
+      });
+
+    } else {
+      // 花火だけ（canvas2優先）
+      if (illCanvas2) {
+        illCanvas2.hidden = false;
+        illCanvas2.style.pointerEvents = "auto";
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            FireworksEngine.start(illCanvas2, { mode, fxScale: 0.55, asciiFps: 12 })
+              .catch(console.error);
+          });
+        });
+
+      } else {
+        // canvas2 がない場合の保険：illCanvasに花火
+        illCanvas.hidden = false;
+        illCanvas.style.pointerEvents = "auto";
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            FireworksEngine.start(illCanvas, { mode, fxScale: 0.55, asciiFps: 12 })
+              .catch(console.error);
+          });
+        });
+      }
+    }
+
+    // ★このページの処理はここで終わり（下の通常分岐に入らない）
+    return;
+  }
+
+  // -------------------------
+  // ↓↓↓ ここから下は「あなたの元の挿絵分岐」を全部そのまま残す ↓↓↓
+  // （eyehand / oxgame / strings / boxspiders / candle / leafwing / 画像挿絵 etc）
+  // -------------------------
 
     if (page.ill === "eyehand") {
       illCanvas.hidden = false;
@@ -5128,6 +5926,7 @@ function renderBookPage() {
     }
   }
 }
+
 
   // =====================
   // 本：ページ移動

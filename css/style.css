@@ -512,21 +512,38 @@ body {
   color: #111;
 }
 
-/* ✅ 挿絵の固定枠（本の白い紙エリア） */
 #book-ill-wrap{
   position: absolute;
-  z-index: 93;           /* 背景より上、文字より下寄りにしたいなら93〜94 */
-  pointer-events: none;  /* 通常は触らない。JSでcanvasだけ触れるようにする */
+  z-index: 93;
+  pointer-events: none;
 
-  /* あなたが JS の bounds で使っている白エリア（1920x1080基準） */
   left:   calc(228px * var(--s));
   top:    calc(129px * var(--s));
   width:  calc(1453px * var(--s));
   height: calc(854px  * var(--s));
 }
 
+/* wrap内の挿絵（canvasとimg）をぴったり重ねる */
+#book-ill-wrap > canvas,
+#book-ill-wrap > img{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 
-/* 挿絵（画像）: wrap内で100% */
+/* 任意：ドット系の見え方安定 */
+#book-ill-wrap > canvas{
+  image-rendering: pixelated;
+}
+
+/* 画像挿絵がクリックを邪魔しないように */
+#book-ill{
+  pointer-events: none;
+}
+
+/* 挿絵（画像） */
 #book-ill{
   position: absolute;
   inset: 0;
@@ -534,12 +551,17 @@ body {
   height: 100%;
   object-fit: contain;
   pointer-events: none;
-  z-index: 1;            /* wrap内の重なり。canvasより下なら1でOK */
+  z-index: 0;            /* ★ここだけ修正：imgは下 */
   opacity: 0;
   transition: opacity 300ms ease;
   user-select: none;
   -webkit-user-drag: none;
 }
+
+/* ★重なり順（下：水紋 canvas / 上：花火 canvas2 / さらに下：画像） */
+#book-ill-canvas  { z-index: 2; }
+#book-ill-canvas2 { z-index: 3; }
+#book-ill         { z-index: 1; }
 
 
 /* タッチ端末のハイライト抑制（任意） */
