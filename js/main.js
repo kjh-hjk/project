@@ -36,6 +36,31 @@ let spidersOpenedOnce = false;
 
 let candleTimelineStartAt = null; // 9ページを初めて開いた瞬間の時刻（performance.now）
 
+// 葉と羽：消えた葉をセッション中ずっと保持（ページめくり/閉じるでも戻らない）
+const leafWingState = {
+  // keyごとに { gone: [bool x9] } を持つ
+  byKey: new Map(),
+};
+
+function getLeafWingState(key) {
+  if (!leafWingState.byKey.has(key)) {
+    leafWingState.byKey.set(key, { gone: new Array(9).fill(false) });
+  }
+  return leafWingState.byKey.get(key);
+}
+
+let leafFade = {
+  active: false,
+  idx: -1,          // ★どの葉をフェードするか
+  startAt: 0,
+  dur: 600,
+};
+
+function startLeafFade(idx) {
+  leafFade.active = true;
+  leafFade.idx = idx;
+  leafFade.startAt = performance.now();
+}
 
 // =====================
 // DOM参照
@@ -155,6 +180,17 @@ preload([
   "assets/candle3.webp",
   "assets/candle4.webp",
   "assets/candlelight.webp",
+
+  "assets/stem.webp",
+  "assets/leaf1.webp",
+  "assets/leaf2.webp",
+  "assets/leaf3.webp",
+  "assets/leaf4.webp",
+  "assets/leaf5.webp",
+  "assets/leaf6.webp",
+  "assets/leaf7.webp",
+  "assets/leaf8.webp",
+  "assets/leaf9.webp",
 ]);
 
 // =====================
@@ -3456,6 +3492,417 @@ function drawFlameWarp(img, rectD, wigglePxDesign) {
   };
 })();
 
+// =====================
+// LeafWingEngine
+// - stem + leaf1..9 を配置
+// - 葉クリックで消える（セッション中ずっと保持）
+// - mode: "dither" | "ascii"
+// =====================
+const LeafWingEngine = (function () {
+  let active = false;
+
+  let outCanvas = null;
+  let outCtx = null;
+
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  // book-ill-wrap の白枠（ページ座標 1920x1080 の中での位置）
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  // 画像
+  const imgStem = new Image();
+  const imgLeaves = Array.from({ length: 9 }, () => new Image());
+  let loaded = false;
+
+  // 外から渡される “状態キー” と “状態オブジェクト”
+  let stateKey = "leafwing_default";
+  let stateRef = null;
+
+  // クリック判定のための矩形（design座標）一覧
+  const LAYOUT = {
+    stem:  { x: 328, y: 258, w: 500, h: 600 },
+    leaves: [
+      { x: 574, y: 238, w: 200, h: 100 }, // leaf1
+      { x: 662, y: 307, w: 200, h: 200 }, // leaf2
+      { x: 745, y: 455, w: 200, h: 200 }, // leaf3
+      { x: 628, y: 540, w: 200, h: 150 }, // leaf4
+      { x: 247, y: 598, w: 200, h: 150 }, // leaf5
+      { x: 297, y: 438, w: 100, h: 150 }, // leaf6
+      { x: 405, y: 475, w: 150, h: 100 }, // leaf7
+      { x: 317, y: 304, w: 200, h: 200 }, // leaf8
+      { x: 363, y: 254, w: 200, h: 100 }, // leaf9
+    ],
+  };
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { x: lx * sx, y: ly * sy };
+  }
+
+  function sizeToRaw(wD, hD) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { w: wD * sx, h: hD * sy };
+  }
+
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { xD: pxRaw / sx + CROP_X, yD: pyRaw / sy + CROP_Y };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+    const dpr = getFixedDpr();
+
+    const BASE_W = 1453, BASE_H = 854;
+    const w = Math.round(BASE_W * dpr);
+    const h = Math.round(BASE_H * dpr);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w;
+      outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw;
+      rawCanvas.height = rh;
+    }
+
+    if (tmpCanvas.width !== w || tmpCanvas.height !== h) {
+      tmpCanvas.width = w;
+      tmpCanvas.height = h;
+    }
+  }
+
+  function drawImageDesign(img, rectD) {
+    const p = designToRaw(rectD.x, rectD.y);
+    const s = sizeToRaw(rectD.w, rectD.h);
+    rawCtx.drawImage(img, p.x, p.y, s.w, s.h);
+  }
+
+  // ===== FX（他エンジンと同じ）=====
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx, ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+
+  function applyCoarseDotDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+    const DOT = 3;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        const ink = (lum < 0.6);
+        if (ink && isDot) stampDot(d, w, h, x, y, DOT);
+        else d[i + 3] = 0;
+      }
+    }
+    ctxSrc.putImageData(im, 0, 0);
+  }
+
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 10;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols; tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.6px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+    const CHARSET = "x+*.:;-=~o";
+    const inkThreshold = 0.03;
+
+    ctxOut.clearRect(0, 0, outW, outH);
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const fontSize = Math.floor(cell * 1.05);
+    ctxOut.font = `550 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        if (im[i + 3] < 10) continue;
+
+        const r = im[i], g = im[i + 1], b = im[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const ink = 1 - lum;
+        if (ink < inkThreshold) continue;
+
+        const rr = hash01(x + 19, y + 73);
+        const ch = CHARSET[Math.floor(rr * CHARSET.length)];
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+        ctxOut.fillText(ch, cx, cy);
+      }
+    }
+  }
+
+  function drawRaw() {
+  if (!loaded || !stateRef) return;
+
+  rawCtx.clearRect(0, 0, rawCanvas.width, rawCanvas.height);
+
+  // stem（常に表示）
+  drawImageDesign(imgStem, LAYOUT.stem);
+
+  // フェード進行度
+  let fadingIdx = -1;
+  let fadeAlpha = 1;
+
+  if (leafFade.active) {
+    const t = (performance.now() - leafFade.startAt) / leafFade.dur;
+    const k = Math.min(1, Math.max(0, t));
+    fadingIdx = leafFade.idx;
+    fadeAlpha = 1 - k;
+
+    // フェード完了 → 消えた扱いにして固定
+    if (k >= 1) {
+      if (fadingIdx >= 0) stateRef.gone[fadingIdx] = true;
+      leafFade.active = false;
+      leafFade.idx = -1;
+      fadeAlpha = 1;
+      fadingIdx = -1;
+    }
+  }
+
+  // leaves（通常表示）
+  for (let i = 0; i < 9; i++) {
+    if (stateRef.gone[i]) continue;
+    if (i === fadingIdx) continue; // フェード対象は後で描く
+    drawImageDesign(imgLeaves[i], LAYOUT.leaves[i]);
+  }
+
+  // フェード対象だけ alpha 付きで描く
+  if (fadingIdx >= 0 && !stateRef.gone[fadingIdx]) {
+    rawCtx.save();
+    rawCtx.globalAlpha = fadeAlpha;
+    drawImageDesign(imgLeaves[fadingIdx], LAYOUT.leaves[fadingIdx]);
+    rawCtx.restore();
+  }
+}
+
+  function drawFx() {
+    if (!outCtx || !outCanvas) return;
+
+    const outW = outCanvas.width;
+    const outH = outCanvas.height;
+
+    tmpCtx.imageSmoothingEnabled = false;
+    tmpCtx.clearRect(0, 0, outW, outH);
+    tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+    if (mode === "dither") {
+      outCtx.clearRect(0, 0, outW, outH);
+      applyCoarseDotDither(tmpCtx, outW, outH, 3);
+      outCtx.drawImage(tmpCanvas, 0, 0);
+      return;
+    }
+
+    if (mode === "ascii") {
+      const now = performance.now();
+      const interval = 1000 / asciiFps;
+      if (now - lastAsciiAt < interval) return;
+      lastAsciiAt = now;
+      renderAsciiInk(tmpCtx, outW, outH, outCtx, outW, outH);
+      return;
+    }
+  }
+
+  function tick() {
+    if (!active) return;
+    drawRaw();
+    drawFx();
+    raf = requestAnimationFrame(tick);
+  }
+
+  // ===== クリック判定 =====
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  function hitLeafIndex(pxRaw, pyRaw) {
+    const d = rawToDesign(pxRaw, pyRaw);
+    const pad = 10; // 当たり判定少し広げる
+
+    // 上にある葉が優先されるように逆順で取る（好み）
+    for (let i = 8; i >= 0; i--) {
+      if (stateRef.gone[i]) continue;
+      const r = LAYOUT.leaves[i];
+      if (
+        d.xD >= r.x - pad &&
+        d.xD <= r.x + r.w + pad &&
+        d.yD >= r.y - pad &&
+        d.yD <= r.y + r.h + pad
+      ) return i;
+    }
+    return -1;
+  }
+
+  function bindPointer() {
+    if (!outCanvas) return;
+
+    function onDown(e) {
+      if (!active || !stateRef) return;
+
+      const p = canvasPointFromEvent(e, outCanvas);
+      const px = p.x * fxScale;
+      const py = p.y * fxScale;
+
+      const idx = hitLeafIndex(px, py);
+      if (idx >= 0) {
+      // すでにフェード中なら二重発火しない
+      if (!(leafFade.active && leafFade.idx === idx)) {
+        startLeafFade(idx);
+      }
+    }
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    bindPointer._onDown = onDown;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas) return;
+    if (bindPointer._onDown) {
+      outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+      bindPointer._onDown = null;
+    }
+  }
+
+  async function loadAll() {
+    loaded = false;
+
+    const promises = [];
+
+    promises.push(new Promise((res, rej) => {
+      imgStem.onload = res;
+      imgStem.onerror = () => rej(new Error("leafwing asset failed: assets/stem.webp"));
+      imgStem.src = "assets/stem.webp";
+    }));
+
+    for (let i = 0; i < 9; i++) {
+      const src = `assets/leaf${i + 1}.webp`;
+      promises.push(new Promise((res, rej) => {
+        imgLeaves[i].onload = res;
+        imgLeaves[i].onerror = () => rej(new Error("leafwing asset failed: " + src));
+        imgLeaves[i].src = src;
+      }));
+    }
+
+    await Promise.all(promises);
+    loaded = true;
+  }
+
+  return {
+    async start(canvasEl, opts) {
+      this.stop();
+
+      outCanvas = canvasEl;
+      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+      mode = opts?.mode || "dither";
+      fxScale = (typeof opts?.fxScale === "number") ? opts.fxScale : 0.55;
+      asciiFps = (typeof opts?.asciiFps === "number") ? opts.asciiFps : 12;
+
+      stateKey = opts?.stateKey || "leafwing_default";
+      stateRef = getLeafWingState(stateKey); // ✅ セッション永続の状態を参照
+
+      lastAsciiAt = 0;
+
+      resizeCanvases();
+      await loadAll();
+      bindPointer();
+
+      active = true;
+      raf = requestAnimationFrame(tick);
+    },
+
+    stop() {
+      active = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+
+      unbindPointer();
+
+      if (outCtx && outCanvas) {
+        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+      }
+
+      outCanvas = null;
+      outCtx = null;
+      stateRef = null;
+      loaded = false;
+    },
+
+    setMode(nextMode) {
+      mode = nextMode || "dither";
+      lastAsciiAt = 0;
+    },
+
+    resize() {
+      // 固定レンダーなので何もしない
+    },
+
+    get active() { return active; }
+  };
+})();
 
 // =====================
 // アセット
@@ -3968,7 +4415,7 @@ const PAGES = {
   },
   7: {
     bg: "open",
-    ill: "ill_04",
+    ill: "leafwing",
     text: `可愛い囁きをこぼして眠りにつくあなたの羽と
 私の鱗を見比べる中で
 あなたの美しさは羽の下の柔らかい身が
@@ -4500,6 +4947,7 @@ function renderBookPage() {
     IllEngine.stop();
     BoxSpidersEngine.stop();
     CandleEngine.stop();
+    LeafWingEngine.stop();
 
     if (bookIll) bookIll.src = "";
 
@@ -4635,6 +5083,31 @@ function renderBookPage() {
             fxScale: 0.55,
             asciiFps: 12,
             timelineStartAt: candleTimelineStartAt, // ✅ 起点を渡す
+          }).catch(console.error);
+        });
+      });
+
+     } else if (page.ill === "leafwing") {
+      illCanvas.hidden = false;
+      illCanvas.style.pointerEvents = "auto";
+
+      const mode = lampOn ? "dither" : "ascii";
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          LeafWingEngine.start(illCanvas, {
+            mode,
+            fxScale: 0.55,
+            asciiFps: 12,
+
+            // 本の白エリア（他と統一）
+            bounds: { x: 228, y: 129, w: 1453, h: 854 },
+
+            // ✅ LeafWingを配置・動かす範囲（ここは作品に合わせて調整）
+            rect: { x: 980, y: 240, w: 650, h: 650 },
+
+            // （もしLeafWingEngine側が素材指定を受ける設計ならここも）
+            // wingSrc: "assets/leafwing.webp",
           }).catch(console.error);
         });
       });
