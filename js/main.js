@@ -34,6 +34,8 @@ let tunedTrack = null;   // 1..10 or null
 // 蜘蛛ページ: 「開いたことがある」フラグ（セッション中だけ保持）
 let spidersOpenedOnce = false;
 
+let candleTimelineStartAt = null; // 9ページを初めて開いた瞬間の時刻（performance.now）
+
 
 // =====================
 // DOM参照
@@ -146,6 +148,13 @@ preload([
   "assets/radio_off_switchoff.webp",
   "assets/radio_on_switchon.webp",
   "assets/radio_off_switchon.webp",
+
+  "assets/candleplate.webp",
+  "assets/candle1.webp",
+  "assets/candle2.webp",
+  "assets/candle3.webp",
+  "assets/candle4.webp",
+  "assets/candlelight.webp",
 ]);
 
 // =====================
@@ -2933,6 +2942,520 @@ if (boxState === "opening" || boxState === "open") {
   };
 })();
 
+// =====================
+// CandleEngine
+// - 5分ごとに candle1→2→3→4
+// - 1〜3は炎あり、炎クリックで揺れる
+// - mode: "dither" | "ascii"
+// =====================
+const CandleEngine = (function () {
+  let active = false;
+
+  let outCanvas = null;
+  let outCtx = null;
+
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  // 白枠（ページ座標 1920x1080 の中での位置）
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  // 5分 = 300000ms
+  const STEP_MS = 1 * 60 * 1000;
+
+  // 画像
+  const imgPlate = new Image();
+  const imgC1 = new Image();
+  const imgC2 = new Image();
+  const imgC3 = new Image();
+  const imgC4 = new Image();
+  const imgFlame = new Image();
+  let loaded = false;
+
+  // 状態
+  let startedAt = 0; // performance.now()
+  let stage = 1;     // 1..4
+
+  // 炎揺れ
+  let wiggleUntil = 0;
+  let wiggleSeed = 0;
+
+  // あなたの座標（ページ座標で保持）
+  // ※「キャンバス1980x1080」と書いてあるけど、既存が1920基準なので
+  //   いったん 1920x1080 基準として扱います（違ったら一括補正できます）
+  const LAYOUT = {
+    plate: { x: 387, y: 710, w: 400, h: 100 },
+
+    c1: { x: 487, y: 445, w: 200, h: 350 },
+    f1: { x: 533, y: 308, w: 100, h: 200 },
+
+    c2: { x: 492, y: 524, w: 200, h: 300 },
+    f2: { x: 533, y: 400, w: 100, h: 200 },
+
+    c3: { x: 492, y: 610, w: 200, h: 200 },
+    f3: { x: 533, y: 476, w: 100, h: 200 },
+
+    c4: { x: 496, y: 705, w: 200, h: 100 },
+  };
+
+  function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+
+    return { x: lx * sx, y: ly * sy };
+  }
+
+  function sizeToRaw(wD, hD) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { w: wD * sx, h: hD * sy };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+    const dpr = getFixedDpr();
+
+    const BASE_W = 1453;
+    const BASE_H = 854;
+
+    const w = Math.round(BASE_W * dpr);
+    const h = Math.round(BASE_H * dpr);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w;
+      outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw;
+      rawCanvas.height = rh;
+    }
+
+    if (tmpCanvas.width !== w || tmpCanvas.height !== h) {
+      tmpCanvas.width = w;
+      tmpCanvas.height = h;
+    }
+  }
+
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx, ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+
+  function applyCoarseDotDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+
+    const DOT = 3;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        const ink = (lum < 0.6);
+        if (ink && isDot) stampDot(d, w, h, x, y, DOT);
+        else d[i + 3] = 0;
+      }
+    }
+    ctxSrc.putImageData(im, 0, 0);
+  }
+
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 10;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols; tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.6px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+    const CHARSET = "x+*.:;-=~o";
+    const inkThreshold = 0.03;
+
+    ctxOut.clearRect(0, 0, outW, outH);
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const fontSize = Math.floor(cell * 1.05);
+    ctxOut.font = `550 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        if (im[i + 3] < 10) continue;
+
+        const r = im[i], g = im[i + 1], b = im[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const ink = 1 - lum;
+        if (ink < inkThreshold) continue;
+
+        const rr = hash01(x + 19, y + 73);
+        const ch = CHARSET[Math.floor(rr * CHARSET.length)];
+
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+        ctxOut.fillText(ch, cx, cy);
+      }
+    }
+  }
+
+  function computeStage() {
+    const elapsed = performance.now() - startedAt;
+
+    // ✅ 4段階をループ（1分ごとに 1→2→3→4→1→…）
+    const idx = Math.floor(elapsed / STEP_MS) % 4; // 0..3
+    stage = idx + 1; // 1..4
+  }
+
+  function currentCandleAndFlame() {
+    if (stage === 1) return { candle: imgC1, c: LAYOUT.c1, flame: imgFlame, f: LAYOUT.f1 };
+    if (stage === 2) return { candle: imgC2, c: LAYOUT.c2, flame: imgFlame, f: LAYOUT.f2 };
+    if (stage === 3) return { candle: imgC3, c: LAYOUT.c3, flame: imgFlame, f: LAYOUT.f3 };
+    return { candle: imgC4, c: LAYOUT.c4, flame: null, f: null };
+  }
+
+  function drawImageDesign(img, rectD, rotateAroundCenterRad = 0) {
+    const p = designToRaw(rectD.x, rectD.y);
+    const s = sizeToRaw(rectD.w, rectD.h);
+
+    if (!rotateAroundCenterRad) {
+      rawCtx.drawImage(img, p.x, p.y, s.w, s.h);
+      return;
+    }
+
+    const cx = p.x + s.w / 2;
+    const cy = p.y + s.h / 2;
+
+    rawCtx.save();
+    rawCtx.translate(cx, cy);
+    rawCtx.rotate(rotateAroundCenterRad);
+    rawCtx.translate(-cx, -cy);
+    rawCtx.drawImage(img, p.x, p.y, s.w, s.h);
+    rawCtx.restore();
+  }
+
+  function smoothstep(a, b, x) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+function drawFlameWarp(img, rectD, wigglePxDesign) {
+  // rectD(デザイン座標) -> raw座標
+  const p = designToRaw(rectD.x, rectD.y);
+  const s = sizeToRaw(rectD.w, rectD.h);
+
+  const slices = 28;               // 20〜40で好み
+  const sliceH = s.h / slices;
+  const srcSliceH = img.height / slices;
+
+  // 時間（秒）
+  const T = performance.now() * 0.001;
+
+  // 炎の“呼吸”（明るさの脈）
+  rawCtx.save();
+  rawCtx.globalAlpha = 0.92 + 0.08 * Math.sin(T * 2.0 + wiggleSeed * 0.5);
+
+  for (let i = 0; i < slices; i++) {
+    // i=0 が画像の上（先端側）、i=slices-1 が下（根元側）
+    // u: 先端=1, 根元=0
+    const u = 1 - (i / (slices - 1));
+
+    // ✅ 下も少し動かしつつ、上ほどよく動く（最低でも 6% くらい動く）
+    const gain = 0.06 + 0.94 * Math.pow(smoothstep(0.12, 1.0, u), 1.35);
+
+    // ✅ 上ほど “時間が遅れる” （根元の動きが伝わる感じ）
+    const lagSec = 0.12 * u;  // 0.08〜0.18くらいで好み
+    const t = (T - lagSec);
+
+    // ✅ 常時ふわふわ（大波 + 小波）
+    const drift = Math.sin(t * 1.2 + wiggleSeed) * 8.0; // ゆっくり大きめ
+    const micro =
+      Math.sin(t * 6.5 + wiggleSeed * 1.7) * 1.4 +      // 小さめ速め
+      Math.sin(t * 9.2 + wiggleSeed * 2.3) * 0.8;
+
+    // ✅ クリック時の追加ブースト（あなたの wigglePxDesign を活かす）
+    // wigglePxDesign を「最大ブースト量（デザインpx）」として扱う
+    const boost = wigglePxDesign * 0.65;
+
+    // このスライスの最終揺れ（デザイン座標px）
+    const wiggleHereDesign = (drift + micro + boost) * gain;
+
+    // dx（raw座標）
+    const dx = wiggleHereDesign * (rawCanvas.width / CROP_W);
+
+    // ✅ 先端ほど細くなる（ふわっとした炎の形）
+    // 1.0（根元）→ 0.78（先端）くらい
+    const thin = 1.0 - 0.22 * Math.pow(u, 1.25);
+
+    // スライスの描画先（細くするので中央合わせ）
+    const sy = i * srcSliceH;
+    const dy = p.y + i * sliceH;
+
+    const dw = s.w * thin;
+    const dxCenter = p.x + (s.w - dw) / 2;
+
+    rawCtx.drawImage(
+      img,
+      0, sy, img.width, srcSliceH,  // src
+      dxCenter + dx, dy, dw, sliceH // dst
+    );
+  }
+
+  rawCtx.restore();
+}
+
+  function drawRaw() {
+    if (!loaded) return;
+
+    computeStage();
+
+    rawCtx.clearRect(0, 0, rawCanvas.width, rawCanvas.height);
+
+    // plate (固定)
+    drawImageDesign(imgPlate, LAYOUT.plate);
+
+    // candle + flame
+    const cur = currentCandleAndFlame();
+    drawImageDesign(cur.candle, cur.c);
+
+    if (cur.flame && cur.f) {
+
+      // 揺れ（クリック後しばらく）
+      const now = performance.now();
+      let wiggle = 0;
+
+      if (now < wiggleUntil) {
+        const t = 1 - (wiggleUntil - now) / 650; // 0..1
+        const amp = (1 - t) * 18; // ← ここが最大揺れ量（デザイン座標px）
+        // サイン波で左右に揺れる
+        wiggle = Math.sin((now * 0.012) + wiggleSeed) * amp;
+      }
+
+      // ルート固定・上ほど揺れる描画
+      drawFlameWarp(cur.flame, cur.f, wiggle);
+    }
+  }
+
+  function drawFx() {
+    if (!outCtx || !outCanvas) return;
+
+    const outW = outCanvas.width;
+    const outH = outCanvas.height;
+
+    tmpCtx.imageSmoothingEnabled = false;
+    tmpCtx.clearRect(0, 0, outW, outH);
+    tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+    if (mode === "dither") {
+      outCtx.clearRect(0, 0, outW, outH);
+      applyCoarseDotDither(tmpCtx, outW, outH, 3);
+      outCtx.drawImage(tmpCanvas, 0, 0);
+      return;
+    }
+
+    if (mode === "ascii") {
+      const now = performance.now();
+      const interval = 1000 / asciiFps;
+      if (now - lastAsciiAt < interval) return;
+      lastAsciiAt = now;
+
+      renderAsciiInk(tmpCtx, outW, outH, outCtx, outW, outH);
+      return;
+    }
+  }
+
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { xD: pxRaw / sx + CROP_X, yD: pyRaw / sy + CROP_Y };
+  }
+
+  function hitFlame(pxRaw, pyRaw) {
+    if (stage >= 4) return false;
+    const cur = currentCandleAndFlame();
+    if (!cur.f) return false;
+
+    const d = rawToDesign(pxRaw, pyRaw);
+    const r = cur.f;
+
+    // 当たり判定を少し広めに
+    const pad = 18;
+    return (
+      d.xD >= r.x - pad &&
+      d.xD <= r.x + r.w + pad &&
+      d.yD >= r.y - pad &&
+      d.yD <= r.y + r.h + pad
+    );
+  }
+
+  function bindPointer() {
+    if (!outCanvas) return;
+
+    function onDown(e) {
+      if (!active) return;
+      const p = canvasPointFromEvent(e, outCanvas);
+      const px = p.x * fxScale;
+      const py = p.y * fxScale;
+
+      if (hitFlame(px, py)) {
+        wiggleUntil = performance.now() + 650;
+        wiggleSeed = Math.random() * Math.PI * 2;
+      }
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    bindPointer._onDown = onDown;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas) return;
+    if (bindPointer._onDown) {
+      outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+      bindPointer._onDown = null;
+    }
+  }
+
+  async function loadAll() {
+    loaded = false;
+    const list = [
+      [imgPlate, "assets/candleplate.webp"],
+      [imgC1, "assets/candle1.webp"],
+      [imgC2, "assets/candle2.webp"],
+      [imgC3, "assets/candle3.webp"],
+      [imgC4, "assets/candle4.webp"],
+      [imgFlame, "assets/candlelight.webp"],
+    ];
+
+    const ps = list.map(([img, src]) => new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error("candle asset failed: " + src));
+      img.src = src;
+    }));
+
+    await Promise.all(ps);
+    loaded = true;
+  }
+
+  function tick() {
+    if (!active) return;
+    drawRaw();
+    drawFx();
+    raf = requestAnimationFrame(tick);
+  }
+
+  return {
+    async start(canvasEl, opts) {
+      this.stop();
+
+      outCanvas = canvasEl;
+      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+      mode = opts?.mode || "dither";
+      fxScale = (typeof opts?.fxScale === "number") ? opts.fxScale : 0.55;
+      asciiFps = (typeof opts?.asciiFps === "number") ? opts.asciiFps : 12;
+
+      startedAt = (typeof opts?.timelineStartAt === "number")
+      ? opts.timelineStartAt
+      : performance.now();
+      stage = 1;
+      wiggleUntil = 0;
+      wiggleSeed = 0;
+      lastAsciiAt = 0;
+
+      resizeCanvases();
+      await loadAll();
+
+      bindPointer();
+
+      active = true;
+      raf = requestAnimationFrame(tick);
+    },
+
+    stop() {
+      active = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+
+      unbindPointer();
+
+      if (outCtx && outCanvas) {
+        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+      }
+
+      outCanvas = null;
+      outCtx = null;
+      loaded = false;
+    },
+
+    setMode(nextMode) {
+      mode = nextMode || "dither";
+      lastAsciiAt = 0;
+    },
+
+    resize() {
+      // 固定レンダーなので何もしない
+    },
+
+    get active() { return active; }
+  };
+})();
+
 
 // =====================
 // アセット
@@ -3480,7 +4003,7 @@ const PAGES = {
   },
   9: {
     bg: "open",
-    ill: "ill_06",
+    ill: "candle",
     text: `為替
 
 保険会社がつける身体の価値
@@ -3750,6 +4273,7 @@ async function toggleLamp() {
     if (OxGameEngine.active) OxGameEngine.setMode(mode);
     if (StringBundleEngine.active) StringBundleEngine.setMode(mode);
     if (BoxSpidersEngine.active) BoxSpidersEngine.setMode(mode);
+    if (CandleEngine.active) CandleEngine.setMode(mode);
 
     // IllEngineは active 判定がないので、とりあえず setMode してOK（startしてなければ無視される）
     IllEngine.setMode(mode);
@@ -3975,6 +4499,7 @@ function renderBookPage() {
     StringBundleEngine.stop();
     IllEngine.stop();
     BoxSpidersEngine.stop();
+    CandleEngine.stop();
 
     if (bookIll) bookIll.src = "";
 
@@ -4088,6 +4613,28 @@ function renderBookPage() {
 
             // 開いたらフラグ更新
             onOpened: () => { spidersOpenedOnce = true; }
+          }).catch(console.error);
+        });
+      });
+
+      } else if (page.ill === "candle") {
+      illCanvas.hidden = false;
+      illCanvas.style.pointerEvents = "auto";
+
+      const mode = lampOn ? "dither" : "ascii";
+
+      // ✅ 9ページが初めて表示された瞬間だけ起点を決める
+      if (candleTimelineStartAt == null) {
+        candleTimelineStartAt = performance.now();
+      }
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          CandleEngine.start(illCanvas, {
+            mode,
+            fxScale: 0.55,
+            asciiFps: 12,
+            timelineStartAt: candleTimelineStartAt, // ✅ 起点を渡す
           }).catch(console.error);
         });
       });
