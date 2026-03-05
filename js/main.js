@@ -193,6 +193,18 @@ preload([
   "assets/leaf7.webp",
   "assets/leaf8.webp",
   "assets/leaf9.webp",
+
+  "assets/chipsbag.webp",
+  "assets/chip1.webp",
+  "assets/chip2.webp",
+  "assets/chip3.webp",
+  "assets/chip4.webp",
+  "assets/chip5.webp",
+  "assets/ad1.webp",
+  "assets/ad2.webp",
+  "assets/ad3.webp",
+  "assets/ad4.webp",
+  "assets/ad5.webp",
 ]);
 
 // =====================
@@ -1153,6 +1165,7 @@ const OxGameEngine = (function () {
   let pointerBound = false;
   let draggingId = -1;
   let grabDx = 0, grabDy = 0; // design offset
+  let bagGrabDx = 0, bagGrabDy = 0;
 
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
@@ -4994,6 +5007,621 @@ function setCoffeeFxVisible(visible) {
 // =====================
 // 詩テキスト
 // =====================
+
+// =====================
+// Chips Bag Engine（page 5）
+// =====================
+const ChipsEngine = (function () {
+  let active = false;
+
+  let outCanvas = null;
+  let outCtx = null;
+
+  // raw合成用（縮小）
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+
+  // 出力用の拡大一時
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  let chipScale = 1.0; // ★追加：chipの表示スケール（画像px→design）
+  let adScale   = 1.3; // ★追加：adの表示スケール
+
+  // design bounds (1920x1080) / crop constants
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  // assets
+  const imgBag = new Image();
+  const chipImgs = Array.from({ length: 5 }, () => new Image());
+  const adImgs = Array.from({ length: 5 }, () => new Image());
+
+  let loaded = false;
+
+  // in-bag state: 0..9 (0..4 chips, 5..9 ads)
+  let inBag = new Array(10).fill(true);
+
+  // items on canvas (design coords)
+  // { key, type:"chip"|"ad", idx:1..5, xD,yD,wD,hD }
+  let items = [];
+
+  // bag layout (design coords)
+  let bagRect = { x: 392, y: 302, w: 400, h: 400 };
+
+  // interaction state
+  let pointerBound = false;
+  let draggingItem = -1;
+  let grabDx = 0, grabDy = 0;     // design offset
+  let draggingBag = false;
+  let bagGrabDx = 0, bagGrabDy = 0; // ★追加：袋を掴んだオフセット
+  let lastBagY = 0;
+  let shakeAccum = 0;
+  let lastShakeAt = 0;
+
+  let downAt = { xD: 0, yD: 0, t: 0 };
+  let moved = false;
+
+  // ad close hitboxes (percent of image)
+  // {x,y,w,h} in 0..1
+  const adCloseBox = {
+    1: { x: 0.70, y: 0.20, w: 0.133, h: 0.22 },
+    2: { x: 0.747, y: 0.20, w: 0.147, h: 0.16 },
+    3: { x: 0.693, y: 0.267, w: 0.133, h: 0.147 },
+    4: { x: 0.70, y: 0.293, w: 0.16, h: 0.167 },
+    5: { x: 0.687, y: 0.27, w: 0.147, h: 0.21 },
+  };
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+  function getRenderSize(canvas) {
+    const dpr = getFixedDpr();
+    const BASE_W = 1453;
+    const BASE_H = 854;
+    return { w: Math.round(BASE_W * dpr), h: Math.round(BASE_H * dpr), dpr };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+    const { w, h } = getRenderSize(outCanvas);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w;
+      outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw;
+      rawCanvas.height = rh;
+    }
+  }
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { x: lx * sx, y: ly * sy };
+  }
+
+  function sizeToRaw(wD, hD) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { w: wD * sx, h: hD * sy };
+  }
+
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { xD: (pxRaw / sx) + CROP_X, yD: (pyRaw / sy) + CROP_Y };
+  }
+
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
+  }
+
+  function hitRect(d, r) {
+    return d.xD >= r.x && d.xD <= (r.x + r.w) && d.yD >= r.y && d.yD <= (r.y + r.h);
+  }
+
+  function pickItem(pxRaw, pyRaw) {
+    const d = rawToDesign(pxRaw, pyRaw);
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (d.xD >= it.xD && d.xD <= it.xD + it.wD && d.yD >= it.yD && d.yD <= it.yD + it.hD) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function spawnOne() {
+    // available keys
+    const avail = [];
+    for (let k = 0; k < 10; k++) if (inBag[k]) avail.push(k);
+    if (avail.length === 0) return false;
+
+    const pick = avail[Math.floor(Math.random() * avail.length)];
+    inBag[pick] = false;
+
+    let type, idx;
+    if (pick < 5) { type = "chip"; idx = pick + 1; }
+    else { type = "ad"; idx = (pick - 5) + 1; }
+
+    // size (design) ★変更：画像から自動取得
+    const img = (type === "chip") ? chipImgs[idx - 1] : adImgs[idx - 1];
+    const sc  = (type === "chip") ? chipScale : adScale;
+
+    const wD = Math.max(1, img.width  * sc);
+    const hD = Math.max(1, img.height * sc);
+
+    // spawn near bag bottom (still inside bounds)
+    const jitterX = (Math.random() * 2 - 1) * 60;
+    const jitterY = (Math.random() * 2 - 1) * 40;
+
+    let xD = (bagRect.x + bagRect.w * 0.55) - wD / 2 + jitterX;
+    let yD = (bagRect.y + bagRect.h * 0.72) - hD / 2 + jitterY;
+
+    // clamp into crop bounds
+    xD = clamp(xD, CROP_X, CROP_X + CROP_W - wD);
+    yD = clamp(yD, CROP_Y, CROP_Y + CROP_H - hD);
+
+    items.push({ key: pick, type, idx, xD, yD, wD, hD });
+    return true;
+  }
+
+  function returnToBag(itemIndex) {
+    const it = items[itemIndex];
+    if (!it) return;
+    inBag[it.key] = true;
+    items.splice(itemIndex, 1);
+  }
+
+  function tryClickRemove(pxRaw, pyRaw) {
+    const i = pickItem(pxRaw, pyRaw);
+    if (i < 0) return false;
+
+    const it = items[i];
+    const d = rawToDesign(pxRaw, pyRaw);
+
+    if (it.type === "chip") {
+      returnToBag(i);
+      return true;
+    }
+
+    if (it.type === "ad") {
+      const hb = adCloseBox[it.idx];
+      if (!hb) return false;
+
+      const lx = (d.xD - it.xD) / it.wD; // 0..1
+      const ly = (d.yD - it.yD) / it.hD;
+
+      if (lx >= hb.x && lx <= hb.x + hb.w && ly >= hb.y && ly <= hb.y + hb.h) {
+        returnToBag(i);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  // =====================
+  // FX: dither / ascii
+  // =====================
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx, ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+
+  function applyCoarseDotDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+
+    const DOT = 3;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        const ink = (lum < 0.6);
+        if (ink && isDot) {
+          stampDot(d, w, h, x, y, DOT);
+        } else {
+          d[i + 3] = 0;
+        }
+      }
+    }
+
+    ctxSrc.putImageData(im, 0, 0);
+  }
+
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 10;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols;
+    tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.7px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+
+    const CHARSET = "x+*.:;-=~#o0&O";
+    const inkThreshold = 0.03;
+
+    ctxOut.clearRect(0, 0, outW, outH);
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const fontSize = Math.floor(cell * 1.05);
+    ctxOut.font =
+      `550 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        const a = im[i + 3];
+        if (a < 10) continue;
+
+        const r = im[i], g = im[i + 1], b = im[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const ink = 1 - lum;
+
+        if (ink < inkThreshold) continue;
+
+        const rr = hash01(x + 19, y + 73);
+        const ch = CHARSET[Math.floor(rr * CHARSET.length)];
+
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+        ctxOut.fillText(ch, cx, cy);
+      }
+    }
+  }
+
+  // =====================
+  // Draw
+  // =====================
+  function drawRaw() {
+    if (!loaded) return;
+
+    const w = rawCanvas.width;
+    const h = rawCanvas.height;
+    rawCtx.clearRect(0, 0, w, h);
+
+    // items first (behind)
+    for (const it of items) {
+      const p = designToRaw(it.xD, it.yD);
+      const s = sizeToRaw(it.wD, it.hD);
+      const img = (it.type === "chip") ? chipImgs[it.idx - 1] : adImgs[it.idx - 1];
+      rawCtx.drawImage(img, p.x, p.y, s.w, s.h);
+    }
+
+    // bag last (front)
+    {
+      const p = designToRaw(bagRect.x, bagRect.y);
+      const s = sizeToRaw(bagRect.w, bagRect.h);
+      rawCtx.drawImage(imgBag, p.x, p.y, s.w, s.h);
+    }
+  }
+
+  function drawFx() {
+    if (!outCtx || !outCanvas) return;
+
+    const outW = outCanvas.width;
+    const outH = outCanvas.height;
+
+    if (tmpCanvas.width !== outW || tmpCanvas.height !== outH) {
+      tmpCanvas.width = outW;
+      tmpCanvas.height = outH;
+    }
+
+    tmpCtx.imageSmoothingEnabled = false;
+    tmpCtx.clearRect(0, 0, outW, outH);
+    tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+    if (mode === "dither") {
+      outCtx.clearRect(0, 0, outW, outH);
+      applyCoarseDotDither(tmpCtx, outW, outH, 3);
+      outCtx.drawImage(tmpCanvas, 0, 0);
+      return;
+    }
+
+    if (mode === "ascii") {
+      const now = performance.now();
+      const interval = 1000 / asciiFps;
+      if (now - lastAsciiAt < interval) return;
+      lastAsciiAt = now;
+
+      renderAsciiInk(tmpCtx, outW, outH, outCtx, outW, outH);
+      return;
+    }
+
+    // fallback
+    outCtx.clearRect(0, 0, outW, outH);
+    outCtx.drawImage(tmpCanvas, 0, 0);
+  }
+
+  function loop() {
+    if (!active) return;
+    raf = requestAnimationFrame(loop);
+    drawRaw();
+    drawFx();
+  }
+
+  // =====================
+  // Pointer
+  // =====================
+  function bindPointer() {
+    if (!outCanvas || pointerBound) return;
+    pointerBound = true;
+
+    outCanvas.style.touchAction = "none";
+    outCanvas.style.pointerEvents = "auto";
+
+    function onDown(e) {
+      if (!active) return;
+      const p = canvasPointFromEvent(e, outCanvas);
+
+      const d = rawToDesign(p.x * (rawCanvas.width / outCanvas.width), p.y * (rawCanvas.height / outCanvas.height));
+      downAt = { xD: d.xD, yD: d.yD, t: performance.now() };
+      moved = false;
+
+      // bag first
+      if (hitRect(d, bagRect)) {
+        draggingBag = true;
+        // ★追加：掴んだ位置のオフセット
+        bagGrabDx = d.xD - bagRect.x;
+        bagGrabDy = d.yD - bagRect.y;
+        lastBagY = d.yD;
+        shakeAccum = 0;
+        outCanvas.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
+      const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
+      const idx = pickItem(pxRaw, pyRaw);
+      if (idx >= 0) {
+        draggingItem = idx;
+        // bring to top
+        const it = items.splice(idx, 1)[0];
+        items.push(it);
+        draggingItem = items.length - 1;
+
+        grabDx = d.xD - it.xD;
+        grabDy = d.yD - it.yD;
+
+        outCanvas.setPointerCapture(e.pointerId);
+      }
+    }
+
+    function onMove(e) {
+      if (!active) return;
+      const p = canvasPointFromEvent(e, outCanvas);
+      const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
+      const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
+      const d = rawToDesign(pxRaw, pyRaw);
+
+      const dx = d.xD - downAt.xD;
+      const dy = d.yD - downAt.yD;
+      if ((dx * dx + dy * dy) > 25) moved = true; // 5px相当
+
+      // bag shake
+      if (draggingBag) {
+      // ★追加：袋をドラッグで動かす（crop内にクランプ）
+      let newX = d.xD - bagGrabDx;
+      let newY = d.yD - bagGrabDy;
+
+      newX = clamp(newX, CROP_X, CROP_X + CROP_W - bagRect.w);
+      newY = clamp(newY, CROP_Y, CROP_Y + CROP_H - bagRect.h);
+
+      // 振り判定用：縦移動量は「指の移動」で取る（自然）
+      const deltaY = d.yD - lastBagY;
+      lastBagY = d.yD;
+
+      // 実際の袋座標を更新
+      bagRect.x = newX;
+      bagRect.y = newY;
+
+      // 既存の振り判定
+      shakeAccum += Math.abs(deltaY);
+
+      const now = performance.now();
+      const COOLDOWN = 180;
+      const STEP = 95; // design px
+      if (shakeAccum >= STEP && (now - lastShakeAt) > COOLDOWN) {
+        const ok = spawnOne();
+        lastShakeAt = now;
+        shakeAccum = 0;
+        if (!ok) shakeAccum = 0;
+      }
+      return;
+    }
+
+      // dragging item
+      if (draggingItem >= 0) {
+        const it = items[draggingItem];
+        if (!it) return;
+
+        let xD = d.xD - grabDx;
+        let yD = d.yD - grabDy;
+
+        xD = clamp(xD, CROP_X, CROP_X + CROP_W - it.wD);
+        yD = clamp(yD, CROP_Y, CROP_Y + CROP_H - it.hD);
+
+        it.xD = xD;
+        it.yD = yD;
+      }
+    }
+
+    function onUp(e) {
+      if (!active) return;
+
+      const p = canvasPointFromEvent(e, outCanvas);
+      const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
+      const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
+
+      // click remove (only if not dragged much)
+      if (!moved) {
+        tryClickRemove(pxRaw, pyRaw);
+      }
+
+      draggingItem = -1;
+      draggingBag = false;
+
+      try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    outCanvas.addEventListener("pointermove", onMove);
+    outCanvas.addEventListener("pointerup", onUp);
+    outCanvas.addEventListener("pointercancel", onUp);
+
+    bindPointer._onDown = onDown;
+    bindPointer._onMove = onMove;
+    bindPointer._onUp = onUp;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas || !pointerBound) return;
+    outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+    outCanvas.removeEventListener("pointermove", bindPointer._onMove);
+    outCanvas.removeEventListener("pointerup", bindPointer._onUp);
+    outCanvas.removeEventListener("pointercancel", bindPointer._onUp);
+    bindPointer._onDown = bindPointer._onMove = bindPointer._onUp = null;
+    pointerBound = false;
+  }
+
+  async function loadAll() {
+    const list = [];
+    imgBag.src = "assets/chipsbag.webp";
+    list.push(new Promise((res, rej) => { imgBag.onload = res; imgBag.onerror = rej; }));
+
+    for (let i = 0; i < 5; i++) {
+      chipImgs[i].src = `assets/chip${i + 1}.webp`;
+      list.push(new Promise((res, rej) => { chipImgs[i].onload = res; chipImgs[i].onerror = rej; }));
+    }
+    for (let i = 0; i < 5; i++) {
+      adImgs[i].src = `assets/ad${i + 1}.webp`;
+      list.push(new Promise((res, rej) => { adImgs[i].onload = res; adImgs[i].onerror = rej; }));
+    }
+
+    await Promise.all(list);
+    loaded = true;
+  }
+
+  async function start(canvas, opts = {}) {
+    outCanvas = canvas;
+    outCtx = outCanvas.getContext("2d", { willReadFrequently: true });
+
+    mode = opts.mode || mode;
+    fxScale = (typeof opts.fxScale === "number") ? opts.fxScale : fxScale;
+    asciiFps = (typeof opts.asciiFps === "number") ? opts.asciiFps : asciiFps;
+
+    // reset state on start
+    bagRect = { x: 392, y: 302, w: 400, h: 400 }; // ★追加：開始時に初期位置へ戻す
+    inBag = new Array(10).fill(true);
+    items = [];
+    draggingItem = -1;
+    draggingBag = false;
+    shakeAccum = 0;
+
+    resizeCanvases();
+
+    if (!loaded) {
+      await loadAll();
+    }
+
+    active = true;
+    bindPointer();
+
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(loop);
+  }
+
+  function stop() {
+    active = false;
+    cancelAnimationFrame(raf);
+    raf = 0;
+
+    unbindPointer();
+
+    if (outCtx && outCanvas) {
+      outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+    }
+
+    outCanvas = null;
+    outCtx = null;
+  }
+
+  function setMode(m) {
+    mode = m;
+    lastAsciiAt = 0;
+    if (outCtx && outCanvas) outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+  }
+
+  // 外からレイアウト調整できるように（必要なら）
+  function setBagRect(rect) {
+    if (!rect) return;
+    bagRect = { ...bagRect, ...rect };
+  }
+
+  return {
+    get active() { return active; },
+    start,
+    stop,
+    setMode,
+    setBagRect,
+  };
+})();
+
+
 const PAGES = {
   0: { bg: "cover", text: "" },
   1: {
@@ -5082,7 +5710,7 @@ const PAGES = {
   },
   5: {
     bg: "open",
-    ill: "ill_03",
+    ill: "chips",
     text: `139円
 
 朝からお腹がなっている
@@ -5436,6 +6064,7 @@ async function toggleLamp() {
     if (StringBundleEngine.active) StringBundleEngine.setMode(mode);
     if (BoxSpidersEngine.active) BoxSpidersEngine.setMode(mode);
     if (CandleEngine.active) CandleEngine.setMode(mode);
+    if (ChipsEngine && ChipsEngine.active) ChipsEngine.setMode(mode);
 
     // IllEngineは active 判定がないので、とりあえず setMode してOK（startしてなければ無視される）
     IllEngine.setMode(mode);
@@ -5524,6 +6153,7 @@ function closeBook() {
   IllEngine.stop();
   WaterRippleEngine.stop();
   FireworksEngine.stop();
+  if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
   IllEngine.stop();
   if (illCanvas) illCanvas.hidden = true;
   if (illCanvas2) illCanvas2.hidden = true;
@@ -5676,6 +6306,7 @@ if (illCanvas) {
   LeafWingEngine.stop();
   WaterRippleEngine.stop();
   FireworksEngine.stop();
+  if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
 
   if (bookIll) bookIll.src = "";
 
@@ -5753,7 +6384,26 @@ if (illCanvas) {
   // （eyehand / oxgame / strings / boxspiders / candle / leafwing / 画像挿絵 etc）
   // -------------------------
 
-    if (page.ill === "eyehand") {
+
+if (page.ill === "chips") {
+  illCanvas.hidden = false;
+  illCanvas.style.pointerEvents = "auto";
+
+  const mode = lampOn ? "dither" : "ascii";
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      ChipsEngine.start(illCanvas, {
+        mode,
+        fxScale: 0.55,
+        asciiFps: 12,
+        bounds: { x: 228, y: 129, w: 1453, h: 854 }
+      }).catch(console.error);
+    });
+  });
+
+} else if (page.ill === "eyehand") {
+
       illCanvas.hidden = false;
       illCanvas.style.pointerEvents = "auto";
 
