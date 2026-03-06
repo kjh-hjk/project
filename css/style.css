@@ -707,3 +707,49 @@ button {
   -webkit-tap-highlight-color: transparent;
   outline: none;
 }
+
+/* =====================
+   Chips hit layer
+===================== */
+#chips-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;
+  pointer-events: none;
+}
+
+#chips-hit-layer[hidden]{
+  display: none !important;
+}
+
+#chips-hit-layer .chips-item-hit,
+#chips-bag-hit,
+#chips-hit-layer .chips-ad-close-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
+#chips-hit-layer .chips-item-hit{
+  cursor: grab;
+  touch-action: none;
+  z-index: 1;
+}
+
+#chips-bag-hit{
+  cursor: grab;
+  touch-action: none;
+  z-index: 3;   /* ← 袋を前面へ */
+}
+
+#chips-hit-layer .chips-ad-close-hit{
+  cursor: pointer;
+  touch-action: manipulation;
+  z-index: 4;   /* ← ×は袋より上 */
+}
+

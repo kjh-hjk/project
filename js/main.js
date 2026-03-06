@@ -68,6 +68,13 @@ let eyehandDraggingViaHit = false;
 
 let oxgameDraggingViaHit = false;
 
+let chipsDraggingViaHit = false;
+let chipsDragKind = null;   // "item" | "bag" | null
+
+let chipsDragStartX = 0;
+let chipsDragStartY = 0;
+let chipsActiveItemIndex = -1;
+
 // =====================
 // DOM参照
 // =====================
@@ -127,6 +134,11 @@ const eyehandHandHit = document.getElementById("eyehand-hand-hit");
 
 const oxgameHitLayer = document.getElementById("oxgame-hit-layer");
 const oxgameHitButtons = Array.from(document.querySelectorAll("#oxgame-hit-layer .ox-token-hit"));
+
+const chipsHitLayer = document.getElementById("chips-hit-layer");
+const chipsItemHitButtons = Array.from(document.querySelectorAll("#chips-hit-layer .chips-item-hit"));
+const chipsBagHit = document.getElementById("chips-bag-hit");
+const chipsAdCloseHitButtons = Array.from(document.querySelectorAll("#chips-hit-layer .chips-ad-close-hit"));
 
 // =====================
 // 画像を先読み
@@ -6996,6 +7008,176 @@ const ChipsEngine = (function () {
     return false;
   }
 
+  function clientToDesign(clientX, clientY) {
+    if (!outCanvas) return null;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const x = (clientX - rect.left) * sx;
+    const y = (clientY - rect.top) * sy;
+
+    const pxRaw = x * (rawCanvas.width / outCanvas.width);
+    const pyRaw = y * (rawCanvas.height / outCanvas.height);
+
+    return {
+      pxRaw,
+      pyRaw,
+      d: rawToDesign(pxRaw, pyRaw)
+    };
+  }
+
+  function beginExternalItemDragByIndex(itemIndex, clientX, clientY) {
+    if (!active || !outCanvas) return false;
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+
+    const pt = clientToDesign(clientX, clientY);
+    if (!pt) return false;
+
+    const it = items[itemIndex];
+    draggingItem = itemIndex;
+    draggingBag = false;
+
+    grabDx = pt.d.xD - it.xD;
+    grabDy = pt.d.yD - it.yD;
+
+    downAt = { xD: pt.d.xD, yD: pt.d.yD, t: performance.now() };
+    moved = false;
+
+    return true;
+  }
+
+  function beginExternalBagDrag(clientX, clientY) {
+    if (!active || !outCanvas) return false;
+
+    const pt = clientToDesign(clientX, clientY);
+    if (!pt) return false;
+
+    draggingBag = true;
+    draggingItem = -1;
+
+    bagGrabDx = pt.d.xD - bagRect.x;
+    bagGrabDy = pt.d.yD - bagRect.y;
+    lastBagY = pt.d.yD;
+    moved = false;
+
+    downAt = { xD: pt.d.xD, yD: pt.d.yD, t: performance.now() };
+
+    return true;
+  }
+
+  function moveExternalDrag(clientX, clientY) {
+    if (!active || !outCanvas) return;
+
+    const pt = clientToDesign(clientX, clientY);
+    if (!pt) return;
+
+    const d = pt.d;
+
+    if (Math.hypot(d.xD - downAt.xD, d.yD - downAt.yD) > 8) {
+      moved = true;
+    }
+
+    if (draggingBag) {
+      let nx = d.xD - bagGrabDx;
+      let ny = d.yD - bagGrabDy;
+
+      nx = clamp(nx, CROP_X, CROP_X + CROP_W - bagRect.w);
+      ny = clamp(ny, CROP_Y, CROP_Y + CROP_H - bagRect.h);
+
+      const dy = d.yD - lastBagY;
+      lastBagY = d.yD;
+
+      shakeAccum += Math.abs(dy);
+      const now = performance.now();
+      if (shakeAccum > 36 && now - lastShakeAt > 80) {
+        spawnOne();
+        shakeAccum = 0;
+        lastShakeAt = now;
+      }
+
+      bagRect.x = nx;
+      bagRect.y = ny;
+      return;
+    }
+
+    if (draggingItem >= 0) {
+      const it = items[draggingItem];
+      if (!it) return;
+
+      let xD = d.xD - grabDx;
+      let yD = d.yD - grabDy;
+
+      xD = clamp(xD, CROP_X, CROP_X + CROP_W - it.wD);
+      yD = clamp(yD, CROP_Y, CROP_Y + CROP_H - it.hD);
+
+      it.xD = xD;
+      it.yD = yD;
+    }
+  }
+
+  function endExternalDrag() {
+    draggingItem = -1;
+    draggingBag = false;
+  }
+
+  function removeItemByIndex(itemIndex) {
+    if (!active) return;
+    if (itemIndex < 0 || itemIndex >= items.length) return;
+    returnToBag(itemIndex);
+  }
+
+  function removeChipByIndex(itemIndex) {
+    if (!active) return;
+    if (itemIndex < 0 || itemIndex >= items.length) return;
+
+    const it = items[itemIndex];
+    if (!it) return;
+    if (it.type !== "chip") return;
+
+    returnToBag(itemIndex);
+  }
+
+  function getItemRects() {
+    return items.map((it, idx) => ({
+      index: idx,
+      type: it.type,
+      adIdx: it.type === "ad" ? it.idx : null,
+      x: it.xD,
+      y: it.yD,
+      w: it.wD,
+      h: it.hD
+    }));
+  }
+
+  function getBagRect() {
+    return { ...bagRect };
+  }
+
+  function getAdCloseRects() {
+    const list = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || it.type !== "ad") continue;
+
+      const hb = adCloseBox[it.idx];
+      if (!hb) continue;
+
+      list.push({
+        itemIndex: i,
+        adIdx: it.idx,
+        x: it.xD + it.wD * hb.x,
+        y: it.yD + it.hD * hb.y,
+        w: it.wD * hb.w,
+        h: it.hD * hb.h
+      });
+    }
+
+    return list;
+  }
+
   // =====================
   // FX: dither / ascii
   // =====================
@@ -7393,12 +7575,46 @@ const ChipsEngine = (function () {
   }
 
   return {
-    get active() { return active; },
-    start,
-    stop,
-    setMode,
-    setBagRect,
-  };
+  get active() { return active; },
+  start,
+  stop,
+  setMode,
+  setBagRect,
+  removeItemByIndex,
+  removeChipByIndex,
+
+  beginItemDragByIndex(itemIndex, clientX, clientY) {
+    return beginExternalItemDragByIndex(itemIndex, clientX, clientY);
+  },
+
+  beginBagDrag(clientX, clientY) {
+    return beginExternalBagDrag(clientX, clientY);
+  },
+
+  moveDragFromClient(clientX, clientY) {
+    moveExternalDrag(clientX, clientY);
+  },
+
+  endDrag() {
+    endExternalDrag();
+  },
+
+  removeItemByIndex(itemIndex) {
+    removeItemByIndex(itemIndex);
+  },
+
+  getItemRects() {
+    return getItemRects();
+  },
+
+  getBagRect() {
+    return getBagRect();
+  },
+
+  getAdCloseRects() {
+    return getAdCloseRects();
+  }
+};
 })();
 
 
@@ -7943,6 +8159,7 @@ function closeBook() {
   if (candleHitLayer) candleHitLayer.hidden = true;
   if (eyehandHitLayer) eyehandHitLayer.hidden = true;
   if (oxgameHitLayer) oxgameHitLayer.hidden = true;
+  if (chipsHitLayer) chipsHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -7999,6 +8216,88 @@ oxgameHitButtons.forEach((btn) => {
     oxgameDraggingViaHit = true;
   });
 });
+
+chipsItemHitButtons.forEach((btn) => {
+  btn.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const idx = Number(btn.dataset.itemIndex);
+    if (!Number.isFinite(idx)) return;
+
+    const started = ChipsEngine.beginItemDragByIndex(idx, e.clientX, e.clientY);
+    if (!started) return;
+
+    chipsDraggingViaHit = true;
+    chipsDragKind = "item";
+    chipsActiveItemIndex = idx;
+    chipsDragStartX = e.clientX;
+    chipsDragStartY = e.clientY;
+  });
+});
+
+window.addEventListener("pointerup", (e) => {
+  if (!chipsDraggingViaHit) return;
+
+  const wasItem = (chipsDragKind === "item");
+  const movedPx = Math.hypot(e.clientX - chipsDragStartX, e.clientY - chipsDragStartY);
+
+  ChipsEngine.endDrag();
+
+  if (wasItem && movedPx < 10 && chipsActiveItemIndex >= 0) {
+    ChipsEngine.removeChipByIndex(chipsActiveItemIndex);
+  }
+
+  chipsDraggingViaHit = false;
+  chipsDragKind = null;
+  chipsActiveItemIndex = -1;
+}, { passive: true });
+
+window.addEventListener("pointercancel", () => {
+  if (!chipsDraggingViaHit) return;
+
+  ChipsEngine.endDrag();
+  chipsDraggingViaHit = false;
+  chipsDragKind = null;
+  chipsActiveItemIndex = -1;
+}, { passive: true });
+
+if (chipsBagHit) {
+  chipsBagHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const started = ChipsEngine.beginBagDrag(e.clientX, e.clientY);
+    if (!started) return;
+
+    chipsDraggingViaHit = true;
+    chipsDragKind = "bag";
+  });
+}
+
+chipsAdCloseHitButtons.forEach((btn) => {
+  btn.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const idx = Number(btn.dataset.itemIndex);
+    if (!Number.isFinite(idx)) return;
+
+    ChipsEngine.removeItemByIndex(idx);
+  });
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!chipsDraggingViaHit) return;
+  ChipsEngine.moveDragFromClient(e.clientX, e.clientY);
+}, { passive: true });
+
+function endChipsHitDrag() {
+  if (!chipsDraggingViaHit) return;
+  chipsDraggingViaHit = false;
+  chipsDragKind = null;
+  ChipsEngine.endDrag();
+}
+
+window.addEventListener("pointerup", endChipsHitDrag, { passive: true });
+window.addEventListener("pointercancel", endChipsHitDrag, { passive: true });
 
 window.addEventListener("pointermove", (e) => {
   if (!oxgameDraggingViaHit) return;
@@ -8152,6 +8451,142 @@ function updateCandleHitbox() {
   candleHitLayer.hidden = false;
 }
 
+function pointInRect(x, y, r) {
+  return (
+    x >= r.x &&
+    x <= r.x + r.w &&
+    y >= r.y &&
+    y <= r.y + r.h
+  );
+}
+
+function isCloseCoveredByBag(closeRect, bagRect) {
+  if (!bagRect) return false;
+
+  const cx = closeRect.x + closeRect.w * 0.5;
+  const cy = closeRect.y + closeRect.h * 0.5;
+
+  return pointInRect(cx, cy, bagRect);
+}
+
+function isCloseCoveredByFrontItems(closeRect, ownerItemIndex, itemRects) {
+  const cx = closeRect.x + closeRect.w * 0.5;
+  const cy = closeRect.y + closeRect.h * 0.5;
+
+  for (let i = 0; i < itemRects.length; i++) {
+    const it = itemRects[i];
+    if (!it) continue;
+
+    // 自分自身は除外
+    if (it.index === ownerItemIndex) continue;
+
+    // 自分より前面にあるものだけ判定
+    if (it.index <= ownerItemIndex) continue;
+
+    if (pointInRect(cx, cy, it)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+  function updateChipsHitboxes() {
+  if (!chipsHitLayer) return;
+
+  if (scene !== "book") {
+    chipsHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "chips") {
+    chipsHitLayer.hidden = true;
+    return;
+  }
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  // item
+  const itemRects = ChipsEngine.getItemRects ? ChipsEngine.getItemRects() : [];
+  chipsItemHitButtons.forEach((btn, i) => {
+    const r = itemRects[i];
+    if (!r) {
+      btn.hidden = true;
+      btn.removeAttribute("data-item-index");
+      return;
+    }
+
+    const left = ((r.x - CROP_X) / CROP_W) * 100;
+    const top = ((r.y - CROP_Y) / CROP_H) * 100;
+    const width = (r.w / CROP_W) * 100;
+    const height = (r.h / CROP_H) * 100;
+
+    btn.style.left = left + "%";
+    btn.style.top = top + "%";
+    btn.style.width = width + "%";
+    btn.style.height = height + "%";
+    btn.hidden = false;
+    btn.dataset.itemIndex = String(r.index);
+  });
+
+  // bag
+  if (chipsBagHit && ChipsEngine.getBagRect) {
+    const b = ChipsEngine.getBagRect();
+    const left = ((b.x - CROP_X) / CROP_W) * 100;
+    const top = ((b.y - CROP_Y) / CROP_H) * 100;
+    const width = (b.w / CROP_W) * 100;
+    const height = (b.h / CROP_H) * 100;
+
+    chipsBagHit.style.left = left + "%";
+    chipsBagHit.style.top = top + "%";
+    chipsBagHit.style.width = width + "%";
+    chipsBagHit.style.height = height + "%";
+    chipsBagHit.hidden = false;
+  }
+
+  // ad close
+  const closeRects = ChipsEngine.getAdCloseRects ? ChipsEngine.getAdCloseRects() : [];
+  const bagRectForClose = ChipsEngine.getBagRect ? ChipsEngine.getBagRect() : null;
+
+  chipsAdCloseHitButtons.forEach((btn, i) => {
+    const r = closeRects[i];
+    if (!r) {
+      btn.hidden = true;
+      btn.removeAttribute("data-item-index");
+      return;
+    }
+
+    const coveredByBag = isCloseCoveredByBag(r, bagRectForClose);
+    const coveredByFrontItems = isCloseCoveredByFrontItems(r, r.itemIndex, itemRects);
+    const covered = coveredByBag || coveredByFrontItems;
+
+    if (covered) {
+      btn.hidden = true;
+      btn.removeAttribute("data-item-index");
+      return;
+    }
+
+    const left = ((r.x - CROP_X) / CROP_W) * 100;
+    const top = ((r.y - CROP_Y) / CROP_H) * 100;
+    const width = (r.w / CROP_W) * 100;
+    const height = (r.h / CROP_H) * 100;
+
+    btn.style.left = left + "%";
+    btn.style.top = top + "%";
+    btn.style.width = width + "%";
+    btn.style.height = height + "%";
+    btn.hidden = false;
+    btn.dataset.itemIndex = String(r.itemIndex);
+  });
+
+  chipsHitLayer.hidden = false;
+}
+
+
 // =====================
 // 本：ページ描画
 // =====================
@@ -8236,6 +8671,10 @@ if (illCanvas) {
     oxgameHitLayer.hidden = true;
   }
 
+  if (chipsHitLayer) {
+    chipsHitLayer.hidden = true;
+  }
+
   // 花火→水紋のクリック転送が残ってたら剥がす
   if (illCanvas2 && illCanvas2._forwardToRipple) {
     illCanvas2.removeEventListener("pointerdown", illCanvas2._forwardToRipple);
@@ -8305,7 +8744,8 @@ if (illCanvas) {
 
 if (page.ill === "chips") {
   illCanvas.hidden = false;
-  illCanvas.style.pointerEvents = "auto";
+  illCanvas.style.pointerEvents = "none";
+  if (chipsHitLayer) chipsHitLayer.hidden = false;
 
   const mode = lampOn ? "dither" : "ascii";
 
@@ -8666,6 +9106,7 @@ function tickHotspots() {
   updateCandleHitbox();
   updateEyehandHitbox();
   updateOxgameHitboxes();
+  updateChipsHitboxes();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();
