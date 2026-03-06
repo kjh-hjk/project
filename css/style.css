@@ -680,3 +680,30 @@ button {
   -webkit-tap-highlight-color: transparent;
   outline: none;
 }
+
+/* =====================
+   OX Game hit layer
+===================== */
+#oxgame-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;
+  pointer-events: none;
+}
+
+#oxgame-hit-layer[hidden]{
+  display: none !important;
+}
+
+#oxgame-hit-layer .ox-token-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}

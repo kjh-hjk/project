@@ -66,6 +66,8 @@ let p14RandomIll = null; // "ripple" | "fireworks" | null
 
 let eyehandDraggingViaHit = false;
 
+let oxgameDraggingViaHit = false;
+
 // =====================
 // DOM参照
 // =====================
@@ -122,6 +124,9 @@ const candleFlameHit = document.getElementById("candle-flame-hit");
 
 const eyehandHitLayer = document.getElementById("eyehand-hit-layer");
 const eyehandHandHit = document.getElementById("eyehand-hand-hit");
+
+const oxgameHitLayer = document.getElementById("oxgame-hit-layer");
+const oxgameHitButtons = Array.from(document.querySelectorAll("#oxgame-hit-layer .ox-token-hit"));
 
 // =====================
 // 画像を先読み
@@ -1408,6 +1413,70 @@ const OxGameEngine = (function () {
     return -1;
   }
 
+  function beginExternalDragById(tokenId, clientX, clientY) {
+    if (!active || !outCanvas) return false;
+    if (tokenId < 0 || tokenId >= tokens.length) return false;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const pxRaw = (clientX - rect.left) * sx * fxScale;
+    const pyRaw = (clientY - rect.top) * sy * fxScale;
+
+    const picked = tokens.splice(tokenId, 1)[0];
+    tokens.push(picked);
+    draggingId = tokens.length - 1;
+
+    const d = rawToDesign(pxRaw, pyRaw);
+    grabDx = d.xD - picked.xD;
+    grabDy = d.yD - picked.yD;
+
+    return true;
+  }
+
+  function moveExternalDrag(clientX, clientY) {
+    if (!active || !outCanvas) return;
+    if (draggingId < 0) return;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const pxRaw = (clientX - rect.left) * sx * fxScale;
+    const pyRaw = (clientY - rect.top) * sy * fxScale;
+
+    const d = rawToDesign(pxRaw, pyRaw);
+
+    let nxD = d.xD - grabDx;
+    let nyD = d.yD - grabDy;
+
+    if (designBounds) {
+      const rD = tokenCfg.size / 2;
+      nxD = clamp(nxD, designBounds.x + rD, designBounds.x + designBounds.w - rD);
+      nyD = clamp(nyD, designBounds.y + rD, designBounds.y + designBounds.h - rD);
+    }
+
+    tokens[draggingId].xD = nxD;
+    tokens[draggingId].yD = nyD;
+  }
+
+  function endExternalDrag() {
+    draggingId = -1;
+  }
+
+  function getTokenRects() {
+    const rD = tokenCfg.size / 2;
+    return tokens.map((t, idx) => ({
+      id: idx,
+      kind: t.kind,
+      x: t.xD - rD,
+      y: t.yD - rD,
+      w: rD * 2,
+      h: rD * 2
+    }));
+  }
+
   function bindPointer() {
     if (!outCanvas || pointerBound) return;
     pointerBound = true;
@@ -1759,6 +1828,22 @@ const OxGameEngine = (function () {
 
       outCanvas = null;
       outCtx = null;
+    },
+
+    beginDragById(tokenId, clientX, clientY) {
+      return beginExternalDragById(tokenId, clientX, clientY);
+    },
+
+    moveDragFromClient(clientX, clientY) {
+      moveExternalDrag(clientX, clientY);
+    },
+
+    endDrag() {
+      endExternalDrag();
+    },
+
+    getTokenRects() {
+      return getTokenRects();
     },
 
     setMode(nextMode) {
@@ -7857,6 +7942,7 @@ function closeBook() {
   if (leafwingHitLayer) leafwingHitLayer.hidden = true;
   if (candleHitLayer) candleHitLayer.hidden = true;
   if (eyehandHitLayer) eyehandHitLayer.hidden = true;
+  if (oxgameHitLayer) oxgameHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -7901,6 +7987,35 @@ if (eyehandHandHit) {
     eyehandDraggingViaHit = true;
   });
 }
+
+oxgameHitButtons.forEach((btn) => {
+  btn.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const idx = Number(btn.dataset.token);
+    const started = OxGameEngine.beginDragById(idx, e.clientX, e.clientY);
+    if (!started) return;
+
+    oxgameDraggingViaHit = true;
+  });
+});
+
+window.addEventListener("pointermove", (e) => {
+  if (!oxgameDraggingViaHit) return;
+  OxGameEngine.moveDragFromClient(e.clientX, e.clientY);
+}, { passive: true });
+
+window.addEventListener("pointerup", () => {
+  if (!oxgameDraggingViaHit) return;
+  oxgameDraggingViaHit = false;
+  OxGameEngine.endDrag();
+}, { passive: true });
+
+window.addEventListener("pointercancel", () => {
+  if (!oxgameDraggingViaHit) return;
+  oxgameDraggingViaHit = false;
+  OxGameEngine.endDrag();
+}, { passive: true });
 
 window.addEventListener("pointermove", (e) => {
   if (!eyehandDraggingViaHit) return;
@@ -8117,6 +8232,10 @@ if (illCanvas) {
     eyehandHitLayer.hidden = true;
   }
 
+  if (oxgameHitLayer) {
+    oxgameHitLayer.hidden = true;
+  }
+
   // 花火→水紋のクリック転送が残ってたら剥がす
   if (illCanvas2 && illCanvas2._forwardToRipple) {
     illCanvas2.removeEventListener("pointerdown", illCanvas2._forwardToRipple);
@@ -8259,7 +8378,9 @@ if (page.ill === "chips") {
 
     } else if (page.ill === "oxgame") {
       illCanvas.hidden = false;
-      illCanvas.style.pointerEvents = "auto";
+      illCanvas.style.pointerEvents = "none";
+    
+      if (oxgameHitLayer) oxgameHitLayer.hidden = false;
 
       const mode = lampOn ? "dither" : "ascii";
 
@@ -8447,6 +8568,57 @@ if (page.ill === "chips") {
   }
 }
 
+function updateOxgameHitboxes() {
+  if (!oxgameHitLayer || !oxgameHitButtons.length) return;
+
+  if (scene !== "book") {
+    oxgameHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "oxgame") {
+    oxgameHitLayer.hidden = true;
+    return;
+  }
+
+  const rects = OxGameEngine.getTokenRects();
+  if (!rects || !rects.length) {
+    oxgameHitLayer.hidden = true;
+    return;
+  }
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  const padX = 0;
+  const padY = 0;
+
+  rects.forEach((r, i) => {
+    const btn = oxgameHitButtons[i];
+    if (!btn) return;
+
+    const left = ((r.x - CROP_X - padX) / CROP_W) * 100;
+    const top = ((r.y - CROP_Y - padY) / CROP_H) * 100;
+    const width = ((r.w + padX * 2) / CROP_W) * 100;
+    const height = ((r.h + padY * 2) / CROP_H) * 100;
+
+    btn.style.left = left + "%";
+    btn.style.top = top + "%";
+    btn.style.width = width + "%";
+    btn.style.height = height + "%";
+    btn.hidden = false;
+  });
+
+  for (let i = rects.length; i < oxgameHitButtons.length; i++) {
+    oxgameHitButtons[i].hidden = true;
+  }
+
+  oxgameHitLayer.hidden = false;
+}
+
 function updateEyehandHitbox() {
   if (!eyehandHitLayer || !eyehandHandHit) return;
 
@@ -8493,6 +8665,7 @@ function updateEyehandHitbox() {
 function tickHotspots() {
   updateCandleHitbox();
   updateEyehandHitbox();
+  updateOxgameHitboxes();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();
