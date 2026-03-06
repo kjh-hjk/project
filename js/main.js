@@ -112,6 +112,9 @@ const radioVolLabel = document.getElementById("radio-volume-label");
 const audioNoise = document.getElementById("audio-noise");
 const audioMusic = document.getElementById("audio-music");
 
+const leafwingHitLayer = document.getElementById("leafwing-hit-layer");
+const leafwingHitButtons = Array.from(document.querySelectorAll("#leafwing-hit-layer .leaf-hit"));
+
 // =====================
 // 画像を先読み
 // =====================
@@ -4628,57 +4631,67 @@ const LeafWingEngine = (function () {
   }
 
   return {
-    async start(canvasEl, opts) {
-      this.stop();
+  async start(canvasEl, opts) {
+    this.stop();
 
-      outCanvas = canvasEl;
-      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+    outCanvas = canvasEl;
+    outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
 
-      mode = opts?.mode || "dither";
-      fxScale = (typeof opts?.fxScale === "number") ? opts.fxScale : 0.55;
-      asciiFps = (typeof opts?.asciiFps === "number") ? opts.asciiFps : 12;
+    mode = opts?.mode || "dither";
+    fxScale = (typeof opts?.fxScale === "number") ? opts.fxScale : 0.55;
+    asciiFps = (typeof opts?.asciiFps === "number") ? opts.asciiFps : 12;
 
-      stateKey = opts?.stateKey || "leafwing_default";
-      stateRef = getLeafWingState(stateKey); // ✅ セッション永続の状態を参照
+    stateKey = opts?.stateKey || "leafwing_default";
+    stateRef = getLeafWingState(stateKey);
 
-      lastAsciiAt = 0;
+    lastAsciiAt = 0;
 
-      resizeCanvases();
-      await loadAll();
-      bindPointer();
+    resizeCanvases();
+    await loadAll();
+    bindPointer();
 
-      active = true;
-      raf = requestAnimationFrame(tick);
-    },
+    active = true;
+    raf = requestAnimationFrame(tick);
+  },
 
-    stop() {
-      active = false;
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
+  stop() {
+    active = false;
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
 
-      unbindPointer();
+    unbindPointer();
 
-      if (outCtx && outCanvas) {
-        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
-      }
+    if (outCtx && outCanvas) {
+      outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+    }
 
-      outCanvas = null;
-      outCtx = null;
-      stateRef = null;
-      loaded = false;
-    },
+    outCanvas = null;
+    outCtx = null;
+    stateRef = null;
+    loaded = false;
+  },
 
-    setMode(nextMode) {
-      mode = nextMode || "dither";
-      lastAsciiAt = 0;
-    },
+  hitLeaf(idx) {
+    if (!active || !stateRef) return;
+    if (idx < 0 || idx > 8) return;
+    if (stateRef.gone[idx]) return;
 
-    resize() {
-      // 固定レンダーなので何もしない
-    },
+    if (!(leafFade.active && leafFade.idx === idx)) {
+      startLeafFade(idx);
+    }
+  },
 
-    get active() { return active; }
-  };
+  setMode(nextMode) {
+    mode = nextMode || "dither";
+    lastAsciiAt = 0;
+  },
+
+  resize() {
+    // 固定レンダーなので何もしない
+  },
+
+  get active() { return active; }
+};
 })();
 
 const MoonEngine = (function () {
@@ -7722,6 +7735,7 @@ function closeBook() {
   IllEngine.stop();
   if (illCanvas) illCanvas.hidden = true;
   if (illCanvas2) illCanvas2.hidden = true;
+  if (leafwingHitLayer) leafwingHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -7739,6 +7753,15 @@ function closeBook() {
 
 if (hitBook) hitBook.addEventListener("click", openBook);
 if (bookClose) bookClose.addEventListener("click", closeBook);
+
+leafwingHitButtons.forEach((btn) => {
+  btn.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const idx = Number(btn.dataset.leaf);
+    LeafWingEngine.hitLeaf(idx);
+  });
+});
 
 // =====================
 // まばたき/暗転/ページめくり
@@ -7883,6 +7906,10 @@ if (illCanvas) {
   if (illCanvas2) {
     illCanvas2.hidden = true;
     illCanvas2.style.pointerEvents = "none";
+  }
+  
+  if (leafwingHitLayer) {
+    leafwingHitLayer.hidden = true;
   }
 
   // 花火→水紋のクリック転送が残ってたら剥がす
@@ -8129,29 +8156,23 @@ if (page.ill === "chips") {
       });
 
      } else if (page.ill === "leafwing") {
-      illCanvas.hidden = false;
-      illCanvas.style.pointerEvents = "auto";
+    illCanvas.hidden = false;
+    illCanvas.style.pointerEvents = "none";   // ← canvas全体では触らせない
+    if (leafwingHitLayer) leafwingHitLayer.hidden = false;
 
-      const mode = lampOn ? "dither" : "ascii";
+    const mode = lampOn ? "dither" : "ascii";
 
+    requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          LeafWingEngine.start(illCanvas, {
-            mode,
-            fxScale: 0.55,
-            asciiFps: 12,
-
-            // 本の白エリア（他と統一）
-            bounds: { x: 228, y: 129, w: 1453, h: 854 },
-
-            // ✅ LeafWingを配置・動かす範囲（ここは作品に合わせて調整）
-            rect: { x: 980, y: 240, w: 650, h: 650 },
-
-            // （もしLeafWingEngine側が素材指定を受ける設計ならここも）
-            // wingSrc: "assets/leafwing.webp",
-          }).catch(console.error);
-        });
+        LeafWingEngine.start(illCanvas, {
+          mode,
+          fxScale: 0.55,
+          asciiFps: 12,
+          bounds: { x: 228, y: 129, w: 1453, h: 854 },
+          rect: { x: 980, y: 240, w: 650, h: 650 },
+        }).catch(console.error);
       });
+    });
 
   // -------------------------
   // ★16ページ：最後の扉

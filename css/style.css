@@ -587,3 +587,42 @@ button {
 
 #book-ill-canvas[hidden] { display: none; }
 
+/* =====================
+   LeafWing hit layer
+===================== */
+#leafwing-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;              /* 挿絵の上 */
+  pointer-events: none;     /* レイヤー自体は素通し */
+}
+
+#leafwing-hit-layer[hidden]{
+  display: none !important;
+}
+
+#leafwing-hit-layer .leaf-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  pointer-events: auto;     /* ボタンだけ触れる */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
+/* 葉の本配置（LeafWingEngine の LAYOUT.leaves に合わせた位置） */
+#leafwing-hit-layer .leaf-hit[data-leaf="0"] { left: 23.81%; top: 12.76%; width: 13.76%; height: 11.71%; }
+#leafwing-hit-layer .leaf-hit[data-leaf="1"] { left: 29.87%; top: 20.84%; width: 13.76%; height: 23.42%; }
+#leafwing-hit-layer .leaf-hit[data-leaf="2"] { left: 35.58%; top: 38.17%; width: 13.76%; height: 23.42%; }
+
+#leafwing-hit-layer .leaf-hit[data-leaf="3"] { left: 27.53%; top: 48.13%; width: 13.76%; height: 17.56%; }
+#leafwing-hit-layer .leaf-hit[data-leaf="4"] { left: 1.31%;  top: 54.92%; width: 13.76%; height: 17.56%; }
+#leafwing-hit-layer .leaf-hit[data-leaf="5"] { left: 4.75%;  top: 36.18%; width: 6.88%;  height: 17.56%; }
+
+#leafwing-hit-layer .leaf-hit[data-leaf="6"] { left: 12.18%; top: 40.52%; width: 10.32%; height: 11.71%; }
+#leafwing-hit-layer .leaf-hit[data-leaf="7"] { left: 6.13%;  top: 20.49%; width: 13.76%; height: 23.42%; }
+#leafwing-hit-layer .leaf-hit[data-leaf="8"] { left: 9.29%;  top: 14.64%; width: 13.76%; height: 11.71%; }
