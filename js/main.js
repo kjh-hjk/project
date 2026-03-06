@@ -1824,30 +1824,73 @@ const StringBundleEngine = (function () {
   }
 
   function bindPointer() {
-    if (pointerBound) return;
-    pointerBound = true;
+  if (!outCanvas || pointerBound) return;
+  pointerBound = true;
 
-    function onMove(e) {
-      if (!active || !outCanvas) return;
+  outCanvas.style.touchAction = "none";
+  outCanvas.style.pointerEvents = "auto";
 
-      const p = canvasPointFromEvent(e, outCanvas);
-      const x = p.x * fxScale;
-      const y = p.y * fxScale;
+  function updatePointer(e) {
+    if (!active || !outCanvas) return;
 
-      prevPX = pointerX; prevPY = pointerY;
-      pointerX = x; pointerY = y;
+    const p = canvasPointFromEvent(e, outCanvas);
+    const x = p.x * fxScale;
+    const y = p.y * fxScale;
 
-      vX = (pointerX - prevPX);
-      vY = (pointerY - prevPY);
-    }
+    prevPX = pointerX;
+    prevPY = pointerY;
+    pointerX = x;
+    pointerY = y;
 
-
-    window.addEventListener("pointermove", onMove, { passive: true });
-
-    // stop() で外す用に保持
-    bindPointer._onMove = onMove;
+    vX = (pointerX - prevPX);
+    vY = (pointerY - prevPY);
   }
 
+  function onDown(e) {
+    if (!active) return;
+    updatePointer(e);
+
+    try { outCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+
+  function onMove(e) {
+    if (!active) return;
+    updatePointer(e);
+  }
+
+  function onUp(e) {
+    try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+
+  outCanvas.addEventListener("pointerdown", onDown, { passive: true });
+  outCanvas.addEventListener("pointermove", onMove, { passive: true });
+  outCanvas.addEventListener("pointerup", onUp, { passive: true });
+  outCanvas.addEventListener("pointercancel", onUp, { passive: true });
+
+  bindPointer._onDown = onDown;
+  bindPointer._onMove = onMove;
+  bindPointer._onUp = onUp;
+}
+
+function unbindPointer() {
+  if (!outCanvas || !pointerBound) return;
+
+  if (bindPointer._onDown) {
+    outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+  }
+  if (bindPointer._onMove) {
+    outCanvas.removeEventListener("pointermove", bindPointer._onMove);
+  }
+  if (bindPointer._onUp) {
+    outCanvas.removeEventListener("pointerup", bindPointer._onUp);
+    outCanvas.removeEventListener("pointercancel", bindPointer._onUp);
+  }
+
+  bindPointer._onDown = null;
+  bindPointer._onMove = null;
+  bindPointer._onUp = null;
+  pointerBound = false;
+}
 
   function stampDot(data, w, h, x, y, size) {
     const r = Math.floor(size / 2);
@@ -2102,7 +2145,8 @@ const StringBundleEngine = (function () {
       bindPointer();
 
       // 初期ポインタ
-      pointerX = pointerY = prevPX = prevPY = 0;
+      pointerX = prevPX = rawCanvas.width * 0.5;
+      pointerY = prevPY = rawCanvas.height * 0.5;
       vX = vY = 0;
 
       active = true;
@@ -2114,19 +2158,18 @@ const StringBundleEngine = (function () {
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
 
+      unbindPointer();
+
       if (outCtx && outCanvas) {
         outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
       }
 
-      if (bindPointer._onMove) {
-        window.removeEventListener("pointermove", bindPointer._onMove);
-        bindPointer._onMove = null;
-      }
-
-      pointerBound = false;
-      outCanvas = null; outCtx = null;
-      designBounds = null; boundsRaw = null;
-      designRect = null; rectRaw = null;
+      outCanvas = null;
+      outCtx = null;
+      designBounds = null;
+      boundsRaw = null;
+      designRect = null;
+      rectRaw = null;
       strands = [];
     },
 
@@ -2136,7 +2179,7 @@ const StringBundleEngine = (function () {
     },
 
     resize() {
-      // ✅ 固定レンダーなので何もしない
+      resizeCanvases();
     },
 
     get active() { return active; }
@@ -5289,6 +5332,8 @@ const LastDoorEngine = (function () {
 
   // 初期角度は上向きやや左寄り
   let angleRad = degToRad(-95);
+  let targetAngleRad = degToRad(-95);  // 目標角度
+  const angleEase = 0.12;              // 0〜1 小さいほどゆっくり
   const MIN_ANGLE = degToRad(-165);
   const MAX_ANGLE = degToRad(-15);
 
@@ -5579,7 +5624,7 @@ const LastDoorEngine = (function () {
   ctx.lineCap = "round";
   ctx.strokeStyle = "#000";
   ctx.fillStyle = "#000";
-  ctx.lineWidth = Math.max(2.2, rawCanvas.width * 0.0038);
+  ctx.lineWidth = Math.max(2.8, rawCanvas.width * 0.0038);
 
   // ===== ドアの大枠 =====
   ctx.strokeRect(po.x, po.y, so.w, so.h);
@@ -5844,7 +5889,7 @@ const LastDoorEngine = (function () {
 
     const im = tctx.getImageData(0, 0, cols, rows).data;
     const CHARSET = "x+*.:;-=~#o0&O";
-    const inkThreshold = 0.005;
+    const inkThreshold = 0.002;
 
     ctxOut.clearRect(0, 0, outW, outH);
     ctxOut.fillStyle = "#000";
@@ -5932,6 +5977,10 @@ const LastDoorEngine = (function () {
         vanished = true;
       }
     }
+
+    // 角度をゆっくり追従させる
+    angleRad += (targetAngleRad - angleRad) * angleEase;
+
   }
 
   function startLetterDrop() {
@@ -5979,7 +6028,7 @@ const LastDoorEngine = (function () {
     a = normalizeNear(a, angleRad);
 
     // そのうえで制限
-    angleRad = clamp(a, MIN_ANGLE, MAX_ANGLE);
+    targetAngleRad = clamp(a, MIN_ANGLE, MAX_ANGLE);
   }
 
   function bindPointer() {
