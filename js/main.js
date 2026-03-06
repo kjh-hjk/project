@@ -4390,7 +4390,7 @@ const LeafWingEngine = (function () {
     tctx.filter = "none";
 
     const im = tctx.getImageData(0, 0, cols, rows).data;
-    const CHARSET = "x+*.:;-=~o";
+    const CHARSET = "x+*✰⋆︎✯~o";
     const inkThreshold = 0.03;
 
     ctxOut.clearRect(0, 0, outW, outH);
