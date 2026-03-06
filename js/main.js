@@ -206,6 +206,11 @@ preload([
   "assets/ad4.webp",
   "assets/ad5.webp",
   "assets/moon.webp",
+
+  "assets/flashlight.webp",
+  "assets/bagclose.webp",
+  "assets/bagopen.webp",
+  "assets/letter.webp",
 ]);
 
 // =====================
@@ -5209,6 +5214,939 @@ const MoonEngine = (function () {
 })();
 
 // =====================
+// LastDoorEngine（page 16）
+// - 懐中電灯をドラッグで回転
+// - 光が当たっている間だけカバン/扉がクリック可能
+// - カバンを開けると手紙が落ちる
+// - 扉は左開き
+// - 扉を開いたあと、再クリックで全体がふっと消える
+// - mode: "dither" | "ascii"
+// =====================
+const LastDoorEngine = (function () {
+  let active = false;
+  let outCanvas = null;
+  let outCtx = null;
+
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+  const darkCanvas = document.createElement("canvas");
+  const darkCtx = darkCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+  const featherCanvas = document.createElement("canvas");
+  const featherCtx = featherCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+  const featherBlurCanvas = document.createElement("canvas");
+  const featherBlurCtx = featherBlurCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+  const imgFlashlight = new Image();
+  const imgBagClose = new Image();
+  const imgBagOpen = new Image();
+  const imgLetter = new Image();
+
+  let loaded = false;
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  // ===== レイアウト（1920x1080 左上基準）=====
+  let layout = null;
+
+  const DEFAULT_LAYOUT = {
+    flashlight: { x: 960, y: 715, w: 200, h: 250 },
+    beamDeg: 40,
+    poemSafeStripX: 1640, // 右端の詩エリアを少し暗闇から外す。後で調整しやすいように変数化
+    safeLeft: 20,
+    safeTop: 20,
+    safeBottom: 20,
+    bagClosed: { x: 1160, y: 248, w: 200, h: 400 },
+    bagOpen:   { x: 1160, y: 248, w: 200, h: 400 },
+    letterSpawn: { x: 1210, y: 491, w: 150, h: 100 },
+    letterDrop:  { x: 1235, y: 648, w: 150, h: 100 },
+    doorOuter: { x: 484, y: 352, w: 225, h: 396 },
+    knob: { x: 648, y: 541, w: 27, h: 27 },
+    doorPts: {
+      A:  { x: 501, y: 369 },
+      B:  { x: 501, y: 730 },
+      C:  { x: 692, y: 369 },
+      D:  { x: 692, y: 730 },
+      Cp: { x: 336, y: 448 },
+      Dp: { x: 336, y: 810 },
+    }
+  };
+
+  // ===== 状態 =====
+  let draggingAim = false;
+
+  // 初期角度は上向きやや左寄り
+  let angleRad = degToRad(-95);
+  const MIN_ANGLE = degToRad(-165);
+  const MAX_ANGLE = degToRad(-15);
+
+  let bagOpened = false;
+
+  let letterVisible = false;
+  let letterDropped = false;
+  let letterAnim = {
+    active: false,
+    startAt: 0,
+    dur: 700,
+    t: 0
+  };
+
+  let doorOpening = false;
+  let doorOpened = false;
+  let doorOpenT = 0; // 0..1
+  const DOOR_OPEN_DUR = 700;
+
+  let vanishing = false;
+  let vanished = false;
+  let vanishT = 0; // 0..1
+  const VANISH_DUR = 320;
+
+  function degToRad(d) { return d * Math.PI / 180; }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function easeInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+
+  function pointToSegmentDistance(px, py, ax, ay, bx, by) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+
+  const abLenSq = abx * abx + aby * aby;
+  if (abLenSq === 0) {
+    const dx = px - ax;
+    const dy = py - ay;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  let t = (apx * abx + apy * aby) / abLenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  const cx = ax + abx * t;
+  const cy = ay + aby * t;
+
+  const dx = px - cx;
+  const dy = py - cy;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+  function normalizeNear(angle, base) {
+    while (angle - base > Math.PI) angle -= Math.PI * 2;
+    while (angle - base < -Math.PI) angle += Math.PI * 2;
+    return angle;
+  }
+
+  function getRenderSize(canvas) {
+    const dpr = getFixedDpr();
+    const BASE_W = 1453;
+    const BASE_H = 854;
+    return {
+      w: Math.round(BASE_W * dpr),
+      h: Math.round(BASE_H * dpr),
+      dpr
+    };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+
+    const { w, h } = getRenderSize(outCanvas);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w;
+      outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw;
+      rawCanvas.height = rh;
+    }
+    if (tmpCanvas.width !== w || tmpCanvas.height !== h) {
+      tmpCanvas.width = w;
+      tmpCanvas.height = h;
+    }
+    if (darkCanvas.width !== rw || darkCanvas.height !== rh) {
+      darkCanvas.width = rw;
+      darkCanvas.height = rh;
+    }
+
+    if (featherCanvas.width !== rw || featherCanvas.height !== rh) {
+      featherCanvas.width = rw;
+      featherCanvas.height = rh;
+    }
+    if (featherBlurCanvas.width !== rw || featherBlurCanvas.height !== rh) {
+      featherBlurCanvas.width = rw;
+      featherBlurCanvas.height = rh;
+    }
+  }
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { x: lx * sx, y: ly * sy };
+  }
+
+  function sizeToRaw(wD, hD) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { w: wD * sx, h: hD * sy };
+  }
+
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return {
+      xD: pxRaw / sx + CROP_X,
+      yD: pyRaw / sy + CROP_Y
+    };
+  }
+
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * sx,
+      y: (e.clientY - rect.top) * sy
+    };
+  }
+
+  function getFlashPivotDesign() {
+    return {
+      x: layout.flashlight.x + layout.flashlight.w / 2,
+      y: layout.flashlight.y + layout.flashlight.h / 2
+    };
+  }
+
+  function getBeamMaxLenDesign() {
+    const pivot = getFlashPivotDesign();
+    const dx = Math.max(pivot.x - CROP_X, CROP_X + CROP_W - pivot.x);
+    const dy = Math.max(pivot.y - CROP_Y, CROP_Y + CROP_H - pivot.y);
+    return Math.sqrt(dx * dx + dy * dy) + 80;
+  }
+
+  function pointInBeam(xD, yD) {
+    if (vanished) return false;
+
+    const pivot = getFlashPivotDesign();
+    const dx = xD - pivot.x;
+    const dy = yD - pivot.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const maxLen = getBeamMaxLenDesign();
+
+    if (dist > maxLen) return false;
+
+    const a = Math.atan2(dy, dx);
+    let diff = a - angleRad;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+
+    return Math.abs(diff) <= degToRad(layout.beamDeg / 2);
+  }
+
+  function rectHitByBeam(rect) {
+    const pts = [
+      { x: rect.x + rect.w * 0.5, y: rect.y + rect.h * 0.5 },
+      { x: rect.x + rect.w * 0.2, y: rect.y + rect.h * 0.2 },
+      { x: rect.x + rect.w * 0.8, y: rect.y + rect.h * 0.2 },
+      { x: rect.x + rect.w * 0.2, y: rect.y + rect.h * 0.8 },
+      { x: rect.x + rect.w * 0.8, y: rect.y + rect.h * 0.8 },
+    ];
+    for (let i = 0; i < pts.length; i++) {
+      if (pointInBeam(pts[i].x, pts[i].y)) return true;
+    }
+    return false;
+  }
+
+  function pointInRectD(xD, yD, rect) {
+    return xD >= rect.x && xD <= rect.x + rect.w && yD >= rect.y && yD <= rect.y + rect.h;
+  }
+
+    function pointInFlashlightHit(xD, yD) {
+    const r = layout.flashlight;
+
+    // まずは少し広めの矩形当たり判定
+    const padX = 18;
+    const padY = 18;
+
+    return (
+      xD >= r.x - padX &&
+      xD <= r.x + r.w + padX &&
+      yD >= r.y - padY &&
+      yD <= r.y + r.h + padY
+    );
+  }
+
+  function currentLetterRect() {
+    if (!letterVisible) return null;
+
+    const t = letterAnim.active ? easeOutCubic(letterAnim.t) : 1;
+    return {
+      x: lerp(layout.letterSpawn.x, layout.letterDrop.x, t),
+      y: lerp(layout.letterSpawn.y, layout.letterDrop.y, t),
+      w: lerp(layout.letterSpawn.w, layout.letterDrop.w, t),
+      h: lerp(layout.letterSpawn.h, layout.letterDrop.h, t),
+    };
+  }
+
+  function getDoorPanelPts(t) {
+    const P = layout.doorPts;
+    return {
+      A:  { x: P.A.x, y: P.A.y },
+      B:  { x: P.B.x, y: P.B.y },
+      C:  { x: lerp(P.C.x,  P.Cp.x, t), y: lerp(P.C.y,  P.Cp.y, t) },
+      D:  { x: lerp(P.D.x,  P.Dp.x, t), y: lerp(P.D.y,  P.Dp.y, t) },
+    };
+  }
+
+  function getKnobCenter(t) {
+  const closedCx = layout.knob.x + layout.knob.w / 2;
+  const closedCy = layout.knob.y + layout.knob.h / 2;
+
+  // ★ 開いたときの最終位置
+  const openCx = 349;
+  const openCy = 603;
+
+  return {
+    x: lerp(closedCx, openCx, t),
+    y: lerp(closedCy, openCy, t)
+  };
+}
+
+  function drawImageDesign(ctx, img, rectD, rotateRad = 0, rotateCenterD = null) {
+    const p = designToRaw(rectD.x, rectD.y);
+    const s = sizeToRaw(rectD.w, rectD.h);
+
+    if (!rotateRad) {
+      ctx.drawImage(img, p.x, p.y, s.w, s.h);
+      return;
+    }
+
+    const cxD = rotateCenterD ? rotateCenterD.x : (rectD.x + rectD.w / 2);
+    const cyD = rotateCenterD ? rotateCenterD.y : (rectD.y + rectD.h / 2);
+    const c = designToRaw(cxD, cyD);
+
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(rotateRad);
+    ctx.translate(-c.x, -c.y);
+    ctx.drawImage(img, p.x, p.y, s.w, s.h);
+    ctx.restore();
+  }
+
+  function drawDoorContent(ctx, alphaMul = 1) {
+  const t = easeInOutQuad(doorOpenT);
+  const P = layout.doorPts;
+
+  // 固定の黒い四角（奥）
+  const A0 = designToRaw(P.A.x, P.A.y);
+  const B0 = designToRaw(P.B.x, P.B.y);
+  const C0 = designToRaw(P.C.x, P.C.y);
+  const D0 = designToRaw(P.D.x, P.D.y);
+
+  // 動く白いドア（手前）
+  const movingPts = getDoorPanelPts(t);
+  const A1 = designToRaw(movingPts.A.x, movingPts.A.y);
+  const B1 = designToRaw(movingPts.B.x, movingPts.B.y);
+  const C1 = designToRaw(movingPts.C.x, movingPts.C.y);
+  const D1 = designToRaw(movingPts.D.x, movingPts.D.y);
+
+  // 大枠
+  const po = designToRaw(layout.doorOuter.x, layout.doorOuter.y);
+  const so = sizeToRaw(layout.doorOuter.w, layout.doorOuter.h);
+
+  ctx.save();
+  ctx.globalAlpha *= alphaMul;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "#000";
+  ctx.fillStyle = "#000";
+  ctx.lineWidth = Math.max(2.2, rawCanvas.width * 0.0038);
+
+  // ===== ドアの大枠 =====
+  ctx.strokeRect(po.x, po.y, so.w, so.h);
+
+  // ===== 奥の黒い四角 ABCD =====
+  ctx.save();
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.moveTo(A0.x, A0.y);
+  ctx.lineTo(C0.x, C0.y);
+  ctx.lineTo(D0.x, D0.y);
+  ctx.lineTo(B0.x, B0.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // ===== 手前の白いドア ABC'D' =====
+  ctx.save();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.moveTo(A1.x, A1.y);
+  ctx.lineTo(C1.x, C1.y);
+  ctx.lineTo(D1.x, D1.y);
+  ctx.lineTo(B1.x, B1.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  // ===== ノブ（動くドアの上） =====
+  const knob = getKnobCenter(t);
+  const rk = designToRaw(knob.x, knob.y);
+  const sk = sizeToRaw(layout.knob.w, layout.knob.h);
+  const knobR = Math.max(sk.w, sk.h) * 0.5;
+
+  // design座標で判定する
+  const knobRadiusD = layout.knob.w * 0.5;
+  const abX = layout.doorPts.A.x; // 固定辺ABのx座標
+
+  // ノブの左端がABに当たったら消す
+  const knobHitAB = (knob.x - knobRadiusD) <= abX;
+
+  if (!knobHitAB) {
+    ctx.beginPath();
+    ctx.arc(rk.x, rk.y, knobR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+  function drawSceneContent(alphaMul = 1) {
+    rawCtx.save();
+    rawCtx.globalAlpha = alphaMul;
+
+    // カバン
+    if (!bagOpened) {
+      drawImageDesign(rawCtx, imgBagClose, layout.bagClosed);
+    } else {
+      drawImageDesign(rawCtx, imgBagOpen, layout.bagOpen);
+    }
+
+    // 手紙
+    if (letterVisible) {
+      drawImageDesign(rawCtx, imgLetter, currentLetterRect());
+    }
+
+    // 扉
+    drawDoorContent(rawCtx, 1);
+
+    rawCtx.restore();
+  }
+
+  function drawDarkMask() {
+    darkCtx.clearRect(0, 0, darkCanvas.width, darkCanvas.height);
+    darkCtx.fillStyle = "#000";
+    darkCtx.fillRect(0, 0, darkCanvas.width, darkCanvas.height);
+
+    // 光コーンと右端の詩エリアだけ抜く
+    darkCtx.save();
+    darkCtx.globalCompositeOperation = "destination-out";
+
+    // 右端詩エリア
+    const safeX = designToRaw(layout.poemSafeStripX, CROP_Y).x;
+    darkCtx.fillRect(safeX, 0, darkCanvas.width - safeX, darkCanvas.height);
+
+    // 左・上・下の余白も常に見せる
+    const safeLeftX = designToRaw(CROP_X + (layout.safeLeft || 0), CROP_Y).x;
+    const safeTopY = designToRaw(CROP_X, CROP_Y + (layout.safeTop || 0)).y;
+    const safeBottomY = designToRaw(CROP_X, CROP_Y + CROP_H - (layout.safeBottom || 0)).y;
+
+    // 左余白
+    darkCtx.fillRect(0, 0, safeLeftX, darkCanvas.height);
+
+    // 上余白
+    darkCtx.fillRect(0, 0, darkCanvas.width, safeTopY);
+
+    // 下余白
+    darkCtx.fillRect(0, safeBottomY, darkCanvas.width, darkCanvas.height - safeBottomY);
+
+        // 光コーン
+    const pivotD = getFlashPivotDesign();
+    const pivot = designToRaw(pivotD.x, pivotD.y);
+    const lenD = getBeamMaxLenDesign();
+
+    const half = degToRad(layout.beamDeg / 2);
+
+    // 外側ふち設定
+    const featherDeg = 18;
+    const featherBlur = 22;
+    const featherAlpha = 0.35;
+    const outerHalf = degToRad((layout.beamDeg + featherDeg) / 2);
+
+    // ===== まず別キャンバスに「ふち用コーン」を描く =====
+    featherCtx.clearRect(0, 0, featherCanvas.width, featherCanvas.height);
+    featherCtx.fillStyle = "#000";
+    featherCtx.globalAlpha = 1;
+
+    const outerP1D = {
+      x: pivotD.x + Math.cos(angleRad - outerHalf) * lenD,
+      y: pivotD.y + Math.sin(angleRad - outerHalf) * lenD
+    };
+    const outerP2D = {
+      x: pivotD.x + Math.cos(angleRad + outerHalf) * lenD,
+      y: pivotD.y + Math.sin(angleRad + outerHalf) * lenD
+    };
+    const outerP1 = designToRaw(outerP1D.x, outerP1D.y);
+    const outerP2 = designToRaw(outerP2D.x, outerP2D.y);
+
+    featherCtx.beginPath();
+    featherCtx.moveTo(pivot.x, pivot.y);
+    featherCtx.lineTo(outerP1.x, outerP1.y);
+    featherCtx.lineTo(outerP2.x, outerP2.y);
+    featherCtx.closePath();
+    featherCtx.fill();
+
+    // ===== それを別キャンバスにぼかしてコピー =====
+    featherBlurCtx.clearRect(0, 0, featherBlurCanvas.width, featherBlurCanvas.height);
+    featherBlurCtx.save();
+    featherBlurCtx.filter = `blur(${featherBlur}px)`;
+    featherBlurCtx.drawImage(featherCanvas, 0, 0);
+    featherBlurCtx.restore();
+
+    // ===== ぼかした外側コーンを darkCtx から少しだけ削る =====
+    darkCtx.save();
+    darkCtx.globalAlpha = featherAlpha;
+    darkCtx.drawImage(featherBlurCanvas, 0, 0);
+    darkCtx.restore();
+
+    // ===== 本来の光コーンをくっきり抜く =====
+    const p1D = {
+      x: pivotD.x + Math.cos(angleRad - half) * lenD,
+      y: pivotD.y + Math.sin(angleRad - half) * lenD
+    };
+    const p2D = {
+      x: pivotD.x + Math.cos(angleRad + half) * lenD,
+      y: pivotD.y + Math.sin(angleRad + half) * lenD
+    };
+    const p1 = designToRaw(p1D.x, p1D.y);
+    const p2 = designToRaw(p2D.x, p2D.y);
+
+    darkCtx.beginPath();
+    darkCtx.moveTo(pivot.x, pivot.y);
+    darkCtx.lineTo(p1.x, p1.y);
+    darkCtx.lineTo(p2.x, p2.y);
+    darkCtx.closePath();
+    darkCtx.fill();
+
+    darkCtx.restore();
+
+    rawCtx.drawImage(darkCanvas, 0, 0);
+  }
+
+  function drawFlashlight(alphaMul = 1) {
+    const pivot = getFlashPivotDesign();
+    drawImageDesign(rawCtx, imgFlashlight, layout.flashlight, angleRad + Math.PI / 2, pivot);
+  }
+
+  function drawRaw() {
+    rawCtx.clearRect(0, 0, rawCanvas.width, rawCanvas.height);
+
+    if (vanished) return;
+
+    const fadeAlpha = vanishing ? (1 - vanishT) : 1;
+
+    drawSceneContent(fadeAlpha);
+    drawDarkMask();
+
+    // 懐中電灯は暗闇の上に描く
+    rawCtx.save();
+    rawCtx.globalAlpha = fadeAlpha;
+    drawFlashlight(1);
+    rawCtx.restore();
+  }
+
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx, ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+
+  function applyCoarseDotDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+    const DOT = 3;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        const ink = (lum < 0.6);
+        if (ink && isDot) {
+          stampDot(d, w, h, x, y, DOT);
+        } else {
+          d[i + 3] = 0;
+        }
+      }
+    }
+
+    ctxSrc.putImageData(im, 0, 0);
+  }
+
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 8;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols;
+    tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.45px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+    const CHARSET = "x+*.:;-=~#o0&O";
+    const inkThreshold = 0.005;
+
+    ctxOut.clearRect(0, 0, outW, outH);
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const fontSize = Math.floor(cell * 1.05);
+    ctxOut.font =
+      `550 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        const a = im[i + 3];
+        if (a < 10) continue;
+
+        const r = im[i], g = im[i + 1], b = im[i + 2];
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const ink = 1 - lum;
+        if (ink < inkThreshold) continue;
+
+        const rr = hash01(x + 19, y + 73);
+        const ch = CHARSET[Math.floor(rr * CHARSET.length)];
+
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+        ctxOut.fillText(ch, cx, cy);
+      }
+    }
+  }
+
+  function drawFx() {
+    if (!outCtx || !outCanvas) return;
+
+    const outW = outCanvas.width;
+    const outH = outCanvas.height;
+
+    tmpCtx.clearRect(0, 0, outW, outH);
+    tmpCtx.imageSmoothingEnabled = false;
+    tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+    if (mode === "dither") {
+      outCtx.clearRect(0, 0, outW, outH);
+      applyCoarseDotDither(tmpCtx, outW, outH, 3);
+      outCtx.drawImage(tmpCanvas, 0, 0);
+      return;
+    }
+
+    if (mode === "ascii") {
+      const now = performance.now();
+      const interval = 1000 / asciiFps;
+      if (now - lastAsciiAt < interval) return;
+      lastAsciiAt = now;
+
+      renderAsciiInk(tmpCtx, outW, outH, outCtx, outW, outH);
+    }
+  }
+
+  function updateState() {
+    const now = performance.now();
+
+    if (letterAnim.active) {
+      const t = clamp((now - letterAnim.startAt) / letterAnim.dur, 0, 1);
+      letterAnim.t = t;
+      if (t >= 1) {
+        letterAnim.active = false;
+        letterDropped = true;
+      }
+    }
+
+    if (doorOpening) {
+      doorOpenT += 16 / DOOR_OPEN_DUR;
+      if (doorOpenT >= 1) {
+        doorOpenT = 1;
+        doorOpening = false;
+        doorOpened = true;
+      }
+    }
+
+    if (vanishing) {
+      vanishT += 16 / VANISH_DUR;
+      if (vanishT >= 1) {
+        vanishT = 1;
+        vanishing = false;
+        vanished = true;
+      }
+    }
+  }
+
+  function startLetterDrop() {
+    letterVisible = true;
+    letterDropped = false;
+    letterAnim.active = true;
+    letterAnim.startAt = performance.now();
+    letterAnim.t = 0;
+  }
+
+  function tick() {
+    if (!active) return;
+    updateState();
+    drawRaw();
+    drawFx();
+    raf = requestAnimationFrame(tick);
+  }
+
+  async function loadAll() {
+    loaded = false;
+
+    const jobs = [
+      { img: imgFlashlight, src: "assets/flashlight.webp" },
+      { img: imgBagClose, src: "assets/bagclose.webp" },
+      { img: imgBagOpen, src: "assets/bagopen.webp" },
+      { img: imgLetter, src: "assets/letter.webp" },
+    ];
+
+    await Promise.all(jobs.map(({ img, src }) => new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error("lastdoor asset failed: " + src));
+      img.src = src;
+    })));
+
+    loaded = true;
+  }
+
+    function setAngleFromPointer(pxRaw, pyRaw) {
+    const d = rawToDesign(pxRaw, pyRaw);
+    const pivot = getFlashPivotDesign();
+
+    let a = Math.atan2(d.yD - pivot.y, d.xD - pivot.x);
+
+    // 今の角度に近い側へ寄せる
+    a = normalizeNear(a, angleRad);
+
+    // そのうえで制限
+    angleRad = clamp(a, MIN_ANGLE, MAX_ANGLE);
+  }
+
+  function bindPointer() {
+    if (!outCanvas) return;
+
+    outCanvas.style.pointerEvents = "auto";
+    outCanvas.style.touchAction = "none";
+
+      function onDown(e) {
+      if (!active || vanished) return;
+
+      const p = canvasPointFromEvent(e, outCanvas);
+      const pxRaw = p.x * fxScale;
+      const pyRaw = p.y * fxScale;
+      const d = rawToDesign(pxRaw, pyRaw);
+
+      const bagRect = bagOpened ? layout.bagOpen : layout.bagClosed;
+      const doorRect = layout.doorOuter;
+
+      // 懐中電灯の上を押した時だけドラッグ開始
+      if (pointInFlashlightHit(d.xD, d.yD)) {
+        draggingAim = true;
+        setAngleFromPointer(pxRaw, pyRaw);
+        try { outCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+        return;
+      }
+
+      // カバン
+      if (!bagOpened && pointInRectD(d.xD, d.yD, bagRect) && rectHitByBeam(bagRect)) {
+        bagOpened = true;
+        startLetterDrop();
+        return;
+      }
+
+      // 扉
+      if (pointInRectD(d.xD, d.yD, doorRect) && rectHitByBeam(doorRect)) {
+        if (letterDropped && !doorOpened && !doorOpening) {
+          doorOpening = true;
+          return;
+        } else if (doorOpened && !vanishing) {
+          vanishing = true;
+          return;
+        }
+      }
+    }
+
+    function onMove(e) {
+      if (!active || vanished) return;
+      if (!draggingAim) return;
+
+      const p = canvasPointFromEvent(e, outCanvas);
+      const pxRaw = p.x * fxScale;
+      const pyRaw = p.y * fxScale;
+      setAngleFromPointer(pxRaw, pyRaw);
+    }
+
+    function onUp(e) {
+      draggingAim = false;
+      try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    outCanvas.addEventListener("pointermove", onMove);
+    outCanvas.addEventListener("pointerup", onUp);
+    outCanvas.addEventListener("pointercancel", onUp);
+
+    bindPointer._onDown = onDown;
+    bindPointer._onMove = onMove;
+    bindPointer._onUp = onUp;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas) return;
+    if (bindPointer._onDown) outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+    if (bindPointer._onMove) outCanvas.removeEventListener("pointermove", bindPointer._onMove);
+    if (bindPointer._onUp) {
+      outCanvas.removeEventListener("pointerup", bindPointer._onUp);
+      outCanvas.removeEventListener("pointercancel", bindPointer._onUp);
+    }
+    bindPointer._onDown = null;
+    bindPointer._onMove = null;
+    bindPointer._onUp = null;
+  }
+
+  return {
+    async start(canvasEl, opts = {}) {
+      this.stop();
+
+      outCanvas = canvasEl;
+      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+      mode = opts.mode || "dither";
+      fxScale = (typeof opts.fxScale === "number") ? opts.fxScale : 0.55;
+      asciiFps = (typeof opts.asciiFps === "number") ? opts.asciiFps : 12;
+
+      layout = {
+        ...DEFAULT_LAYOUT,
+        ...opts.layout,
+        doorPts: {
+          ...DEFAULT_LAYOUT.doorPts,
+          ...(opts.layout?.doorPts || {})
+        }
+      };
+
+      // 状態リセット
+      draggingAim = false;
+      angleRad = degToRad(-95);
+
+      bagOpened = false;
+
+      letterVisible = false;
+      letterDropped = false;
+      letterAnim.active = false;
+      letterAnim.startAt = 0;
+      letterAnim.t = 0;
+
+      doorOpening = false;
+      doorOpened = false;
+      doorOpenT = 0;
+
+      vanishing = false;
+      vanished = false;
+      vanishT = 0;
+
+      resizeCanvases();
+
+      if (!loaded) {
+        await loadAll();
+      }
+
+      bindPointer();
+      active = true;
+      raf = requestAnimationFrame(tick);
+    },
+
+    stop() {
+      active = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+
+      unbindPointer();
+
+      if (outCtx && outCanvas) {
+        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+      }
+
+      outCanvas = null;
+      outCtx = null;
+      draggingAim = false;
+      lastAsciiAt = 0;
+      layout = null;
+    },
+
+    setMode(nextMode) {
+      mode = nextMode || "dither";
+      lastAsciiAt = 0;
+    },
+
+    resize() {
+      // 固定レンダーなので何もしない
+    },
+
+    get active() { return active; }
+  };
+})();
+
+// =====================
 // アセット
 // =====================
 function getAsset(prefix, suffix) {
@@ -6517,7 +7455,7 @@ const PAGES = {
   },
   16: {
     bg: "open",
-    ill: "ill_10",
+    ill: "lastdoor",
     text: `私は怒っている
 あなたを愛している`
   },
@@ -6729,6 +7667,7 @@ function closeBook() {
   IllEngine.stop();
   WaterRippleEngine.stop();
   FireworksEngine.stop();
+  LastDoorEngine.stop();
   if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
   if (typeof MoonEngine !== "undefined") MoonEngine.stop();
   IllEngine.stop();
@@ -6883,6 +7822,7 @@ if (illCanvas) {
   LeafWingEngine.stop();
   WaterRippleEngine.stop();
   FireworksEngine.stop();
+  LastDoorEngine.stop();
   if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
   if (typeof MoonEngine !== "undefined") MoonEngine.stop(); // ★追加
 
@@ -7163,6 +8103,54 @@ if (page.ill === "chips") {
           }).catch(console.error);
         });
       });
+
+  // -------------------------
+  // ★16ページ：最後の扉
+  // -------------------------
+  } else if (page.ill === "lastdoor") {
+    illCanvas.hidden = false;
+    illCanvas.style.pointerEvents = "auto";
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        LastDoorEngine.start(illCanvas, {
+          mode,
+          fxScale: 0.55,
+          asciiFps: 12,
+          layout: {
+            flashlight: { x: 960, y: 715, w: 200, h: 250 },
+            beamDeg: 40,
+
+            // 右端だけ暗闇を外す仮値
+            // 後でこの数値を右へ動かすと「見える範囲」が狭くなり、
+            // 左へ動かすと「見える範囲」が広くなります
+            poemSafeStripX: 1520,
+
+            safeLeft: 20,
+            safeTop: 20,
+            safeBottom: 20,
+
+            bagClosed: { x: 1160, y: 248, w: 200, h: 400 },
+            bagOpen:   { x: 1160, y: 248, w: 200, h: 400 },
+
+            letterSpawn: { x: 1210, y: 491, w: 150, h: 100 },
+            letterDrop:  { x: 1235, y: 648, w: 150, h: 100 },
+
+            doorOuter: { x: 484, y: 352, w: 225, h: 396 },
+            knob: { x: 648, y: 541, w: 27, h: 27 },
+
+            doorPts: {
+              A:  { x: 501, y: 369 },
+              B:  { x: 501, y: 730 },
+              C:  { x: 692, y: 369 },
+              D:  { x: 692, y: 730 },
+              Cp: { x: 336, y: 448 },
+              Dp: { x: 336, y: 810 },
+            }
+          }
+        });
+      });
+    });
 
     } else if (page.ill && bookIll) {
       // 通常挿絵（画像をIllEngineに渡す）
