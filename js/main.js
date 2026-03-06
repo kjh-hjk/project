@@ -205,6 +205,7 @@ preload([
   "assets/ad3.webp",
   "assets/ad4.webp",
   "assets/ad5.webp",
+  "assets/moon.webp",
 ]);
 
 // =====================
@@ -4632,6 +4633,581 @@ const LeafWingEngine = (function () {
   };
 })();
 
+const MoonEngine = (function () {
+  let active = false;
+  let outCanvas = null;
+  let outCtx = null;
+
+  const rawCanvas = document.createElement("canvas");
+  const rawCtx = rawCanvas.getContext("2d", { willReadFrequently: true });
+
+  const tmpCanvas = document.createElement("canvas");
+  const tmpCtx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+
+  const imgMoon = new Image();
+  let loaded = false;
+
+  let mode = "dither";
+  let raf = 0;
+  let lastAsciiAt = 0;
+
+  let fxScale = 0.55;
+  let asciiFps = 12;
+
+  const CROP_X = 228, CROP_Y = 129, CROP_W = 1453, CROP_H = 854;
+
+  let moon = {
+    cx: 960,
+    cy: 540,
+    r: 250
+  };
+
+  let baseY = 540;
+  let verticalRange = 80;
+
+  let dragging = false;
+  let grabDx = 0;
+  let grabDy = 0;
+  let pointerBound = false;
+
+  // ドラッグ開始時のテクスチャー位置を保持
+  let dragStartTexOffsetX = 0;
+  let dragStartTexOffsetY = 0;
+
+  // テクスチャの見える位置
+  let texOffsetX = 0;
+  let texOffsetY = 0;
+
+  // 左右端に到達したら永久ロック
+  let texLocked = false;
+
+  // 初回だけ中央に初期化するためのフラグ
+  let texInitialized = false;
+
+  // テクスチャーサイズ
+  let texScale = 2.0;   // 2倍表示
+  let texWDesign = 0;
+  let texHDesign = 0;
+
+  function clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  }
+
+  function getRenderSize(canvas) {
+    const dpr = getFixedDpr();
+    const BASE_W = 1453;
+    const BASE_H = 854;
+    return { w: Math.round(BASE_W * dpr), h: Math.round(BASE_H * dpr), dpr };
+  }
+
+  function resizeCanvases() {
+    if (!outCanvas) return;
+
+    const { w, h } = getRenderSize(outCanvas);
+
+    if (outCanvas.width !== w || outCanvas.height !== h) {
+      outCanvas.width = w;
+      outCanvas.height = h;
+    }
+
+    const rw = Math.max(1, Math.floor(w * fxScale));
+    const rh = Math.max(1, Math.floor(h * fxScale));
+
+    if (rawCanvas.width !== rw || rawCanvas.height !== rh) {
+      rawCanvas.width = rw;
+      rawCanvas.height = rh;
+    }
+
+    if (tmpCanvas.width !== w || tmpCanvas.height !== h) {
+      tmpCanvas.width = w;
+      tmpCanvas.height = h;
+    }
+  }
+
+  function designToRaw(xD, yD) {
+    const lx = xD - CROP_X;
+    const ly = yD - CROP_Y;
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { x: lx * sx, y: ly * sy };
+  }
+
+  function rawToDesign(pxRaw, pyRaw) {
+    const sx = rawCanvas.width / CROP_W;
+    const sy = rawCanvas.height / CROP_H;
+    return { xD: pxRaw / sx + CROP_X, yD: pyRaw / sy + CROP_Y };
+  }
+
+  function sizeToRaw(vD) {
+    const sx = rawCanvas.width / CROP_W;
+    return vD * sx;
+  }
+
+  function canvasPointFromEvent(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width;
+    const sy = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * sx,
+      y: (e.clientY - rect.top) * sy
+    };
+  }
+
+  async function loadAll() {
+    await new Promise((res, rej) => {
+      imgMoon.onload = () => {
+        loaded = true;
+        res();
+      };
+      imgMoon.onerror = () => rej(new Error("moon image failed: assets/moon.webp"));
+      imgMoon.src = "assets/moon.webp";
+    });
+  }
+
+  // =================================
+  // moon専用 dither: 白 / グレー / 黒
+  // 黒 = 高密度
+  // 灰 = 低密度
+  // 白 = 透明
+  // =================================
+  function stampDot(data, w, h, x, y, size) {
+    const r = Math.floor(size / 2);
+    for (let yy = -r; yy <= r; yy++) {
+      for (let xx = -r; xx <= r; xx++) {
+        const nx = x + xx;
+        const ny = y + yy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = (ny * w + nx) * 4;
+        data[j] = data[j + 1] = data[j + 2] = 0;
+        data[j + 3] = 255;
+      }
+    }
+  }
+
+  function applyMoonDither(ctxSrc, w, h, scale = 3) {
+    const im = ctxSrc.getImageData(0, 0, w, h);
+    const d = im.data;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 10) continue;
+
+        const lum = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+
+        // グリッド中心判定
+        const bx = Math.floor(x / scale);
+        const by = Math.floor(y / scale);
+        const px = bx * scale + Math.floor(scale / 2);
+        const py = by * scale + Math.floor(scale / 2);
+        const isDot = (x === px && y === py);
+
+        // 3階調
+        // 黒: lum < 0.33
+        // 灰: 0.33 <= lum < 0.66
+        // 白: 0.66 <= lum
+        if (lum < 0.33) {
+          // 高密度: 全グリッド
+          if (isDot) {
+            stampDot(d, w, h, x, y, 3);
+          } else {
+            d[i + 3] = 0;
+          }
+        } else if (lum < 0.66) {
+          // 低密度: チェッカー状に半分だけ
+          const keep = ((bx + by) % 2 === 0);
+          if (isDot && keep) {
+            stampDot(d, w, h, x, y, 2);
+          } else {
+            d[i + 3] = 0;
+          }
+        } else {
+          d[i + 3] = 0;
+        }
+      }
+    }
+
+    ctxSrc.putImageData(im, 0, 0);
+  }
+
+  function hash01(ix, iy) {
+    const s = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
+  // =================================
+  // moon専用 ascii:
+  // 黒 = 大きめ記号
+  // 灰 = 小さめ記号
+  // 白 = 空白
+  // =================================
+  function renderMoonAscii(ctxSrc, w, h, ctxOut, outW, outH) {
+    const cell = 10;
+    const cols = Math.max(1, Math.floor(outW / cell));
+    const rows = Math.max(1, Math.floor(outH / cell));
+
+    const tiny = document.createElement("canvas");
+    tiny.width = cols;
+    tiny.height = rows;
+    const tctx = tiny.getContext("2d", { willReadFrequently: true });
+
+    tctx.imageSmoothingEnabled = true;
+    tctx.clearRect(0, 0, cols, rows);
+    tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
+
+    tctx.filter = "blur(0.6px)";
+    tctx.drawImage(tiny, 0, 0);
+    tctx.filter = "none";
+
+    const im = tctx.getImageData(0, 0, cols, rows).data;
+
+    ctxOut.fillStyle = "#000";
+    ctxOut.textAlign = "center";
+    ctxOut.textBaseline = "middle";
+
+    const DARK_SET = "MOON";
+    const MID_SET  = ".:+*";
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const i = (y * cols + x) * 4;
+        const a = im[i + 3];
+        if (a < 10) continue;
+
+        const lum = (0.2126 * im[i] + 0.7152 * im[i + 1] + 0.0722 * im[i + 2]) / 255;
+
+        const cx = (x + 0.5) * cell;
+        const cy = (y + 0.52) * cell;
+
+        if (lum < 0.33) {
+          const rr = hash01(x + 31, y + 97);
+          const ch = DARK_SET[Math.floor(rr * DARK_SET.length)];
+          ctxOut.font =
+            `700 ${Math.floor(cell * 1.08)}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+          ctxOut.fillText(ch, cx, cy);
+        } else if (lum < 0.66) {
+          const rr = hash01(x + 57, y + 13);
+          const ch = MID_SET[Math.floor(rr * MID_SET.length)];
+          ctxOut.font =
+            `500 ${Math.floor(cell * 0.72)}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+          ctxOut.fillText(ch, cx, cy);
+        }
+      }
+    }
+  }
+
+  function drawMoonBackingToOut() {
+  if (!outCtx || !outCanvas) return;
+
+  // 月中心を outCanvas 座標に変換
+  const centerRaw = designToRaw(moon.cx, moon.cy);
+  const cx = centerRaw.x * (outCanvas.width / rawCanvas.width);
+  const cy = centerRaw.y * (outCanvas.height / rawCanvas.height);
+
+  // 半径を outCanvas 基準に変換
+  const edgeRaw = designToRaw(moon.cx + moon.r, moon.cy);
+  const rRaw = Math.abs(edgeRaw.x - centerRaw.x);
+  const rOut = rRaw * (outCanvas.width / rawCanvas.width);
+
+  // 背景の折り目を隠すための淡い下地
+  const grad = outCtx.createRadialGradient(
+    cx, cy, 0,
+    cx, cy, rOut
+  );
+
+  grad.addColorStop(0.0, "rgba(238,235,214,0.98)");
+  grad.addColorStop(0.82, "rgba(238,235,214,0.95)");
+  grad.addColorStop(1.0, "rgba(238,235,214,0.88)");
+
+  outCtx.save();
+  outCtx.beginPath();
+  outCtx.arc(cx, cy, rOut, 0, Math.PI * 2);
+  outCtx.fillStyle = grad;
+  outCtx.fill();
+  outCtx.restore();
+}
+
+  function drawMoonSphere() {
+  if (!loaded) return;
+
+  rawCtx.clearRect(0, 0, rawCanvas.width, rawCanvas.height);
+
+  const p = designToRaw(moon.cx, moon.cy);
+  const rRaw = sizeToRaw(moon.r);
+
+  // 月テクスチャー
+  rawCtx.save();
+  rawCtx.beginPath();
+  rawCtx.arc(p.x, p.y, rRaw, 0, Math.PI * 2);
+  rawCtx.clip();
+
+  const texW = sizeToRaw(texWDesign);
+  const texH = sizeToRaw(texHDesign);
+
+  const dx = p.x - texW / 2 + sizeToRaw(texOffsetX);
+  const dy = p.y - texH / 2 + sizeToRaw(texOffsetY);
+
+  rawCtx.drawImage(
+    imgMoon,
+    dx,
+    dy,
+    texW,
+    texH
+  );
+
+  rawCtx.restore();
+
+  // 外側だけの黒グラデーション
+  // rawCtxに描くので、このグローも ascii / dither 化される
+  const glowOuter = rRaw * 1.10;
+  const glowGrad = rawCtx.createRadialGradient(
+    p.x, p.y, rRaw * 0.985,
+    p.x, p.y, glowOuter
+  );
+
+  glowGrad.addColorStop(0.0, "rgba(45, 45, 45, 0.15)");
+  glowGrad.addColorStop(0.35, "rgba(108, 108, 108, 0.08)");
+  glowGrad.addColorStop(0.7, "rgba(190, 190, 190, 0.02)");
+  glowGrad.addColorStop(1.0, "rgba(255, 255, 255, 0)");
+
+
+  rawCtx.save();
+  rawCtx.beginPath();
+  rawCtx.arc(p.x, p.y, glowOuter, 0, Math.PI * 2);
+  rawCtx.arc(p.x, p.y, rRaw, 0, Math.PI * 2, true);
+  rawCtx.fillStyle = glowGrad;
+  rawCtx.fill("evenodd");
+  rawCtx.restore();
+
+  // 円のフチ
+  rawCtx.beginPath();
+  rawCtx.arc(p.x, p.y, rRaw, 0, Math.PI * 2);
+  rawCtx.lineWidth = Math.max(1, rRaw * 0.02);
+  rawCtx.strokeStyle = "#000";
+  rawCtx.stroke();
+}
+
+  function drawFx() {
+  if (!outCtx || !outCanvas) return;
+
+  const outW = outCanvas.width;
+  const outH = outCanvas.height;
+
+  tmpCtx.imageSmoothingEnabled = false;
+  tmpCtx.clearRect(0, 0, outW, outH);
+  tmpCtx.drawImage(rawCanvas, 0, 0, rawCanvas.width, rawCanvas.height, 0, 0, outW, outH);
+
+  if (mode === "dither") {
+    outCtx.clearRect(0, 0, outW, outH);
+
+    // 折り目を消すための背景だけは out 側に描く
+    // なのでこれは ascii / dither 化されない
+    drawMoonBackingToOut();
+
+    // 月本体 + グローは raw 側にあるので、一緒に dither 化される
+    applyMoonDither(tmpCtx, outW, outH, 3);
+    outCtx.drawImage(tmpCanvas, 0, 0);
+    return;
+  }
+
+  if (mode === "ascii") {
+    const now = performance.now();
+    const interval = 1000 / asciiFps;
+    if (now - lastAsciiAt < interval) return;
+    lastAsciiAt = now;
+
+    outCtx.clearRect(0, 0, outW, outH);
+
+    // 背景だけ非ascii
+    drawMoonBackingToOut();
+
+    // 月本体 + グローは ascii 化
+    renderMoonAscii(tmpCtx, outW, outH, outCtx, outW, outH);
+    return;
+  }
+
+  outCtx.clearRect(0, 0, outW, outH);
+  drawMoonBackingToOut();
+  outCtx.drawImage(tmpCanvas, 0, 0);
+}
+
+  function loop() {
+    if (!active) return;
+    drawMoonSphere();
+    drawFx();
+    raf = requestAnimationFrame(loop);
+  }
+
+  function bindPointer() {
+    if (!outCanvas || pointerBound) return;
+    pointerBound = true;
+
+    outCanvas.style.touchAction = "none";
+    outCanvas.style.pointerEvents = "auto";
+
+    function onDown(e) {
+    if (!active) return;
+    if (texLocked) return; // ロック後はもうつかめない
+
+    const p = canvasPointFromEvent(e, outCanvas);
+    const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
+    const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
+    const d = rawToDesign(pxRaw, pyRaw);
+
+    const dx = d.xD - moon.cx;
+    const dy = d.yD - moon.cy;
+
+    if ((dx * dx + dy * dy) <= moon.r * moon.r) {
+      dragging = true;
+
+      // ドラッグ開始時のポインタ位置
+      grabDx = d.xD;
+      grabDy = d.yD;
+
+      // その時点のテクスチャー位置を保存
+      dragStartTexOffsetX = texOffsetX;
+      dragStartTexOffsetY = texOffsetY;
+
+      try { outCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  }
+
+    function onMove(e) {
+    if (!active || !dragging) return;
+    if (texLocked) return;
+
+    const p = canvasPointFromEvent(e, outCanvas);
+    const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
+    const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
+    const d = rawToDesign(pxRaw, pyRaw);
+
+    // 画像の端まで見せるための可動範囲
+    const maxOffsetX = Math.max(0, (texWDesign - moon.r * 2) / 2);
+    const maxOffsetY = Math.max(0, (texHDesign - moon.r * 2) / 2);
+
+    // 開始時点のoffsetに差分を足して候補値を作る
+    const nextOffsetX = dragStartTexOffsetX + (d.xD - grabDx);
+    const nextOffsetY = dragStartTexOffsetY + (d.yD - grabDy);
+
+    // clampして実際の値を決める
+    const clampedX = clamp(nextOffsetX, -maxOffsetX, maxOffsetX);
+    const clampedY = clamp(nextOffsetY, -maxOffsetY, maxOffsetY);
+
+    texOffsetX = clampedX;
+    texOffsetY = clampedY;
+
+    // 左右端に到達したら、その位置で永久ロック
+    if (clampedX !== nextOffsetX) {
+      texLocked = true;
+      dragging = false;
+    }
+  }
+
+    function onUp(e) {
+      dragging = false;
+      try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+
+    outCanvas.addEventListener("pointerdown", onDown);
+    outCanvas.addEventListener("pointermove", onMove);
+    outCanvas.addEventListener("pointerup", onUp);
+    outCanvas.addEventListener("pointercancel", onUp);
+
+    bindPointer._onDown = onDown;
+    bindPointer._onMove = onMove;
+    bindPointer._onUp = onUp;
+  }
+
+  function unbindPointer() {
+    if (!outCanvas || !pointerBound) return;
+
+    outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+    outCanvas.removeEventListener("pointermove", bindPointer._onMove);
+    outCanvas.removeEventListener("pointerup", bindPointer._onUp);
+    outCanvas.removeEventListener("pointercancel", bindPointer._onUp);
+
+    bindPointer._onDown = bindPointer._onMove = bindPointer._onUp = null;
+    pointerBound = false;
+  }
+
+  return {
+    async start(canvasEl, opts = {}) {
+      this.stop();
+
+      outCanvas = canvasEl;
+      outCtx = outCanvas.getContext("2d", { willReadFrequently: true, alpha: true });
+
+      mode = opts.mode || "dither";
+      fxScale = (typeof opts.fxScale === "number") ? opts.fxScale : 0.55;
+      asciiFps = (typeof opts.asciiFps === "number") ? opts.asciiFps : 12;
+
+      moon.cx = (typeof opts.cx === "number") ? opts.cx : 960;
+      moon.cy = (typeof opts.cy === "number") ? opts.cy : 540;
+      moon.r  = (typeof opts.r  === "number") ? opts.r  : 250;
+
+      baseY = moon.cy;
+      verticalRange = (typeof opts.verticalRange === "number") ? opts.verticalRange : 80;
+
+      texScale = (typeof opts.texScale === "number") ? opts.texScale : 8.0;
+
+      // 月画像を先にロード
+      if (!loaded) {
+        await loadAll();
+      }
+
+      // テクスチャーサイズを design座標で計算
+      texWDesign = moon.r * 2 * texScale;
+      texHDesign = texWDesign * (imgMoon.height / imgMoon.width);
+
+      // 初回だけ中央ぴったりで初期化
+      if (!texInitialized) {
+        texOffsetX = 0;
+        texOffsetY = 0;
+        texInitialized = true;
+      }
+
+      // 毎回、現在位置を開始基準にそろえる
+      dragStartTexOffsetX = texOffsetX;
+      dragStartTexOffsetY = texOffsetY;
+
+      dragging = false;
+      lastAsciiAt = 0;
+
+      resizeCanvases();
+
+      bindPointer();
+      active = true;
+      raf = requestAnimationFrame(loop);
+    },
+
+    stop() {
+      active = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+
+      unbindPointer();
+
+      if (outCtx && outCanvas) {
+        outCtx.clearRect(0, 0, outCanvas.width, outCanvas.height);
+      }
+
+      outCanvas = null;
+      outCtx = null;
+      dragging = false;
+      lastAsciiAt = 0;
+    },
+
+    setMode(nextMode) {
+      mode = nextMode || "dither";
+      lastAsciiAt = 0;
+    },
+
+    resize() {},
+
+    get active() { return active; }
+  };
+})();
+
 // =====================
 // アセット
 // =====================
@@ -5706,7 +6282,7 @@ const PAGES = {
   },
   4: {
     bg: "open",
-    ill: "ill_02",
+    ill: "moon",
   },
   5: {
     bg: "open",
@@ -6154,6 +6730,7 @@ function closeBook() {
   WaterRippleEngine.stop();
   FireworksEngine.stop();
   if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
+  if (typeof MoonEngine !== "undefined") MoonEngine.stop();
   IllEngine.stop();
   if (illCanvas) illCanvas.hidden = true;
   if (illCanvas2) illCanvas2.hidden = true;
@@ -6307,6 +6884,7 @@ if (illCanvas) {
   WaterRippleEngine.stop();
   FireworksEngine.stop();
   if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
+  if (typeof MoonEngine !== "undefined") MoonEngine.stop(); // ★追加
 
   if (bookIll) bookIll.src = "";
 
@@ -6401,6 +6979,32 @@ if (page.ill === "chips") {
       }).catch(console.error);
     });
   });
+
+  } else if (page.ill === "moon") {
+    illCanvas.hidden = false;
+    illCanvas.style.pointerEvents = "auto";
+
+    if (illCanvas2) {
+      illCanvas2.hidden = true;
+      illCanvas2.style.pointerEvents = "none";
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        MoonEngine.start(illCanvas, {
+          mode,
+          fxScale: 0.55,
+          asciiFps: 12,
+
+          // 月の初期位置と動ける範囲
+          cx: 960,
+          cy: 540,
+          r: 250,
+          verticalRange: 80
+        }).catch(console.error);
+      });
+    });
+
 
 } else if (page.ill === "eyehand") {
 
