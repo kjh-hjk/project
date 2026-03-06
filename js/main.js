@@ -64,6 +64,8 @@ function startLeafFade(idx) {
 
 let p14RandomIll = null; // "ripple" | "fireworks" | null
 
+let eyehandDraggingViaHit = false;
+
 // =====================
 // DOM参照
 // =====================
@@ -117,6 +119,9 @@ const leafwingHitButtons = Array.from(document.querySelectorAll("#leafwing-hit-l
 
 const candleHitLayer = document.getElementById("candle-hit-layer");
 const candleFlameHit = document.getElementById("candle-flame-hit");
+
+const eyehandHitLayer = document.getElementById("eyehand-hit-layer");
+const eyehandHandHit = document.getElementById("eyehand-hand-hit");
 
 // =====================
 // 画像を先読み
@@ -742,6 +747,79 @@ const EyeHandEngine = (function () {
     );
   }
 
+  function getHandRectDesign() {
+    if (!active || !designLayout) return null;
+
+    const hand = designLayout.hand;
+    return {
+      x: handDX - hand.w / 2,
+      y: handDY - hand.h / 2,
+      w: hand.w,
+      h: hand.h
+    };
+  }
+
+  function startExternalDrag(clientX, clientY) {
+    if (!active || !outCanvas || !loaded) return false;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const pxRaw = (clientX - rect.left) * sx * fxScale;
+    const pyRaw = (clientY - rect.top) * sy * fxScale;
+
+    if (!hitTestHand(pxRaw, pyRaw)) return false;
+
+    draggingHand = true;
+
+    const d = rawToDesign(pxRaw, pyRaw);
+    handGrabOffDX = d.xD - handDX;
+    handGrabOffDY = d.yD - handDY;
+
+    pointerX = pxRaw;
+    pointerY = pyRaw;
+
+    return true;
+  }
+
+  function moveExternalDrag(clientX, clientY) {
+    if (!active || !outCanvas) return;
+    if (!draggingHand) return;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const pxRaw = (clientX - rect.left) * sx * fxScale;
+    const pyRaw = (clientY - rect.top) * sy * fxScale;
+
+    pointerX = pxRaw;
+    pointerY = pyRaw;
+
+    handMoved = true;
+
+    const d = rawToDesign(pxRaw, pyRaw);
+    let nxD = d.xD - handGrabOffDX;
+    let nyD = d.yD - handGrabOffDY;
+
+    if (designLayout && designLayout.bounds) {
+      const b = designLayout.bounds;
+      const hwD = designLayout.hand.w / 2;
+      const hhD = designLayout.hand.h / 2;
+
+      nxD = clamp(nxD, b.x + hwD, b.x + b.w - hwD);
+      nyD = clamp(nyD, b.y + hhD, b.y + b.h - hhD);
+    }
+
+    handDX = nxD;
+    handDY = nyD;
+  }
+
+  function endExternalDrag() {
+    draggingHand = false;
+  }
+
   function bindPointer() {
     if (!outCanvas || pointerBound) return;
     pointerBound = true;
@@ -1119,6 +1197,22 @@ const EyeHandEngine = (function () {
       outCtx = null;
       designLayout = null;
       dragBoundsRaw = null;
+    },
+
+    beginDragFromClient(clientX, clientY) {
+      return startExternalDrag(clientX, clientY);
+    },
+
+    moveDragFromClient(clientX, clientY) {
+      moveExternalDrag(clientX, clientY);
+    },
+
+    endDrag() {
+      endExternalDrag();
+    },
+
+    getHandRect() {
+      return getHandRectDesign();
     },
 
     setMode(nextMode) {
@@ -7762,6 +7856,7 @@ function closeBook() {
   if (illCanvas2) illCanvas2.hidden = true;
   if (leafwingHitLayer) leafwingHitLayer.hidden = true;
   if (candleHitLayer) candleHitLayer.hidden = true;
+  if (eyehandHitLayer) eyehandHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -7795,6 +7890,34 @@ if (candleFlameHit) {
     CandleEngine.triggerFlame();
   });
 }
+
+if (eyehandHandHit) {
+  eyehandHandHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const started = EyeHandEngine.beginDragFromClient(e.clientX, e.clientY);
+    if (!started) return;
+
+    eyehandDraggingViaHit = true;
+  });
+}
+
+window.addEventListener("pointermove", (e) => {
+  if (!eyehandDraggingViaHit) return;
+  EyeHandEngine.moveDragFromClient(e.clientX, e.clientY);
+}, { passive: true });
+
+window.addEventListener("pointerup", () => {
+  if (!eyehandDraggingViaHit) return;
+  eyehandDraggingViaHit = false;
+  EyeHandEngine.endDrag();
+}, { passive: true });
+
+window.addEventListener("pointercancel", () => {
+  if (!eyehandDraggingViaHit) return;
+  eyehandDraggingViaHit = false;
+  EyeHandEngine.endDrag();
+}, { passive: true });
 
 // =====================
 // まばたき/暗転/ページめくり
@@ -7990,6 +8113,10 @@ if (illCanvas) {
     candleHitLayer.hidden = true;
   }
 
+  if (eyehandHitLayer) {
+    eyehandHitLayer.hidden = true;
+  }
+
   // 花火→水紋のクリック転送が残ってたら剥がす
   if (illCanvas2 && illCanvas2._forwardToRipple) {
     illCanvas2.removeEventListener("pointerdown", illCanvas2._forwardToRipple);
@@ -8103,7 +8230,8 @@ if (page.ill === "chips") {
 } else if (page.ill === "eyehand") {
 
       illCanvas.hidden = false;
-      illCanvas.style.pointerEvents = "auto";
+      illCanvas.style.pointerEvents = "none";
+      if (eyehandHitLayer) eyehandHitLayer.hidden = false;
 
       const mode = lampOn ? "dither" : "ascii";
 
@@ -8319,8 +8447,52 @@ if (page.ill === "chips") {
   }
 }
 
+function updateEyehandHitbox() {
+  if (!eyehandHitLayer || !eyehandHandHit) return;
+
+  if (scene !== "book") {
+    eyehandHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "eyehand") {
+    eyehandHitLayer.hidden = true;
+    return;
+  }
+
+  const rect = EyeHandEngine.getHandRect();
+  if (!rect) {
+    eyehandHitLayer.hidden = true;
+    return;
+  }
+
+  // book-ill-wrap は「白枠」だけなので、1920全体ではなく白枠基準へ直す
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  // 開始判定を少しだけ広げたいならここを微調整
+  const padX = 0;
+  const padY = 0;
+
+  const left = ((rect.x - CROP_X - padX) / CROP_W) * 100;
+  const top = ((rect.y - CROP_Y - padY) / CROP_H) * 100;
+  const width = ((rect.w + padX * 2) / CROP_W) * 100;
+  const height = ((rect.h + padY * 2) / CROP_H) * 100;
+
+  eyehandHandHit.style.left = left + "%";
+  eyehandHandHit.style.top = top + "%";
+  eyehandHandHit.style.width = width + "%";
+  eyehandHandHit.style.height = height + "%";
+
+  eyehandHitLayer.hidden = false;
+}
+
 function tickHotspots() {
   updateCandleHitbox();
+  updateEyehandHitbox();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();
