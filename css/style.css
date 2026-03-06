@@ -626,3 +626,30 @@ button {
 #leafwing-hit-layer .leaf-hit[data-leaf="6"] { left: 12.18%; top: 40.52%; width: 10.32%; height: 11.71%; }
 #leafwing-hit-layer .leaf-hit[data-leaf="7"] { left: 6.13%;  top: 20.49%; width: 13.76%; height: 23.42%; }
 #leafwing-hit-layer .leaf-hit[data-leaf="8"] { left: 9.29%;  top: 14.64%; width: 13.76%; height: 11.71%; }
+
+/* =====================
+   Candle hit layer
+===================== */
+#candle-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;
+  pointer-events: none;
+}
+
+#candle-hit-layer[hidden]{
+  display: none !important;
+}
+
+#candle-flame-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}

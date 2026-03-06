@@ -115,6 +115,9 @@ const audioMusic = document.getElementById("audio-music");
 const leafwingHitLayer = document.getElementById("leafwing-hit-layer");
 const leafwingHitButtons = Array.from(document.querySelectorAll("#leafwing-hit-layer .leaf-hit"));
 
+const candleHitLayer = document.getElementById("candle-hit-layer");
+const candleFlameHit = document.getElementById("candle-flame-hit");
+
 // =====================
 // 画像を先読み
 // =====================
@@ -3266,6 +3269,11 @@ const CandleEngine = (function () {
     return { candle: imgC4, c: LAYOUT.c4, flame: null, f: null };
   }
 
+  function igniteWiggle() {
+    wiggleUntil = performance.now() + 650;
+    wiggleSeed = Math.random() * Math.PI * 2;
+  }
+
   function drawImageDesign(img, rectD, rotateAroundCenterRad = 0) {
     const p = designToRaw(rectD.x, rectD.y);
     const s = sizeToRaw(rectD.w, rectD.h);
@@ -3457,8 +3465,7 @@ function drawFlameWarp(img, rectD, wigglePxDesign) {
       const py = p.y * fxScale;
 
       if (hitFlame(px, py)) {
-        wiggleUntil = performance.now() + 650;
-        wiggleSeed = Math.random() * Math.PI * 2;
+        igniteWiggle();
       }
     }
 
@@ -3544,6 +3551,24 @@ function drawFlameWarp(img, rectD, wigglePxDesign) {
       outCanvas = null;
       outCtx = null;
       loaded = false;
+    },
+
+    triggerFlame() {
+      if (!active) return;
+
+      const cf = currentCandleAndFlame();
+      if (!cf.flame || !cf.f) return;   // stage4は炎なし
+
+      igniteWiggle();
+    },
+
+    getFlameRect() {
+      if (!active) return null;
+
+      const cf = currentCandleAndFlame();
+      if (!cf.flame || !cf.f) return null;   // stage4は炎なし
+
+      return { ...cf.f };
     },
 
     setMode(nextMode) {
@@ -7736,6 +7761,7 @@ function closeBook() {
   if (illCanvas) illCanvas.hidden = true;
   if (illCanvas2) illCanvas2.hidden = true;
   if (leafwingHitLayer) leafwingHitLayer.hidden = true;
+  if (candleHitLayer) candleHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -7762,6 +7788,13 @@ leafwingHitButtons.forEach((btn) => {
     LeafWingEngine.hitLeaf(idx);
   });
 });
+
+if (candleFlameHit) {
+  candleFlameHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    CandleEngine.triggerFlame();
+  });
+}
 
 // =====================
 // まばたき/暗転/ページめくり
@@ -7840,6 +7873,47 @@ async function playPageflip(direction) {
   }
 }
 
+function updateCandleHitbox() {
+  if (!candleHitLayer || !candleFlameHit) return;
+
+  if (scene !== "book") {
+    candleHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "candle") {
+    candleHitLayer.hidden = true;
+    return;
+  }
+
+  const rect = CandleEngine.getFlameRect();
+  if (!rect) {
+    candleHitLayer.hidden = true;   // stage4では炎なし
+    return;
+  }
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  const padX = 16;
+  const padY = 16;
+
+  const left = ((rect.x - CROP_X - padX) / CROP_W) * 100;
+  const top = ((rect.y - CROP_Y - padY) / CROP_H) * 100;
+  const width = ((rect.w + padX * 2) / CROP_W) * 100;
+  const height = ((rect.h + padY * 2) / CROP_H) * 100;
+
+  candleFlameHit.style.left = left + "%";
+  candleFlameHit.style.top = top + "%";
+  candleFlameHit.style.width = width + "%";
+  candleFlameHit.style.height = height + "%";
+
+  candleHitLayer.hidden = false;
+}
+
 // =====================
 // 本：ページ描画
 // =====================
@@ -7910,6 +7984,10 @@ if (illCanvas) {
   
   if (leafwingHitLayer) {
     leafwingHitLayer.hidden = true;
+  }
+
+  if (candleHitLayer) {
+    candleHitLayer.hidden = true;
   }
 
   // 花火→水紋のクリック転送が残ってたら剥がす
@@ -8134,26 +8212,28 @@ if (page.ill === "chips") {
       });
 
       } else if (page.ill === "candle") {
-      illCanvas.hidden = false;
-      illCanvas.style.pointerEvents = "auto";
+        illCanvas.hidden = false;
+        illCanvas.style.pointerEvents = "none";
+        if (candleHitLayer) candleHitLayer.hidden = false;
 
-      const mode = lampOn ? "dither" : "ascii";
+        const mode = lampOn ? "dither" : "ascii";
 
-      // ✅ 9ページが初めて表示された瞬間だけ起点を決める
-      if (candleTimelineStartAt == null) {
-        candleTimelineStartAt = performance.now();
-      }
+        if (candleTimelineStartAt == null) {
+          candleTimelineStartAt = performance.now();
+        }
 
-      requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          CandleEngine.start(illCanvas, {
-            mode,
-            fxScale: 0.55,
-            asciiFps: 12,
-            timelineStartAt: candleTimelineStartAt, // ✅ 起点を渡す
-          }).catch(console.error);
+          requestAnimationFrame(() => {
+            CandleEngine.start(illCanvas, {
+              mode,
+              fxScale: 0.55,
+              asciiFps: 12,
+              timelineStartAt: candleTimelineStartAt,
+            }).then(() => {
+              updateCandleHitbox();
+            }).catch(console.error);
+          });
         });
-      });
 
      } else if (page.ill === "leafwing") {
     illCanvas.hidden = false;
@@ -8239,6 +8319,54 @@ if (page.ill === "chips") {
   }
 }
 
+function tickHotspots() {
+  updateCandleHitbox();
+  requestAnimationFrame(tickHotspots);
+}
+tickHotspots();
+
+function updateCandleHitbox() {
+  if (!candleHitLayer || !candleFlameHit) return;
+
+  if (scene !== "book") {
+    candleHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "candle") {
+    candleHitLayer.hidden = true;
+    return;
+  }
+
+  const rect = CandleEngine.getFlameRect();
+  if (!rect) {
+    candleHitLayer.hidden = true;   // stage4は炎なし
+    return;
+  }
+
+  // bookの白枠基準
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  // 少し押しやすく広げる
+  const padX = 16;
+  const padY = 16;
+
+  const left = ((rect.x - CROP_X - padX) / CROP_W) * 100;
+  const top = ((rect.y - CROP_Y - padY) / CROP_H) * 100;
+  const width = ((rect.w + padX * 2) / CROP_W) * 100;
+  const height = ((rect.h + padY * 2) / CROP_H) * 100;
+
+  candleFlameHit.style.left = left + "%";
+  candleFlameHit.style.top = top + "%";
+  candleFlameHit.style.width = width + "%";
+  candleFlameHit.style.height = height + "%";
+
+  candleHitLayer.hidden = false;
+}
 
   // =====================
   // 本：ページ移動
