@@ -1900,7 +1900,7 @@ const StringBundleEngine = (function () {
 
   // ---- ascii: 濃淡なし（黒判定だけ）でランダム文字（細め設定）
   function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
-    const cell = 10; // 例：大きめ文字にしたいなら14〜20くらい
+    const cell = 9; // 例：大きめ文字にしたいなら14〜20くらい
     const cols = Math.max(1, Math.floor(outW / cell));
     const rows = Math.max(1, Math.floor(outH / cell));
 
@@ -1912,7 +1912,7 @@ const StringBundleEngine = (function () {
     tctx.clearRect(0, 0, cols, rows);
     tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
 
-    tctx.filter = "blur(0.6px)";
+    tctx.filter = "blur(0.7px)";
     tctx.drawImage(tiny, 0, 0);
     tctx.filter = "none";
 
@@ -4378,7 +4378,7 @@ const LeafWingEngine = (function () {
   }
 
   function renderAsciiInk(ctxSrc, w, h, ctxOut, outW, outH) {
-    const cell = 10;
+    const cell = 9;
     const cols = Math.max(1, Math.floor(outW / cell));
     const rows = Math.max(1, Math.floor(outH / cell));
 
@@ -4390,13 +4390,13 @@ const LeafWingEngine = (function () {
     tctx.clearRect(0, 0, cols, rows);
     tctx.drawImage(ctxSrc.canvas, 0, 0, w, h, 0, 0, cols, rows);
 
-    tctx.filter = "blur(0.6px)";
+    tctx.filter = "blur(0.7px)";
     tctx.drawImage(tiny, 0, 0);
     tctx.filter = "none";
 
     const im = tctx.getImageData(0, 0, cols, rows).data;
     const CHARSET = "x+*✰⋆︎✯~o";
-    const inkThreshold = 0.03;
+    const inkThreshold = 0.01;
 
     ctxOut.clearRect(0, 0, outW, outH);
     ctxOut.fillStyle = "#000";
@@ -4920,9 +4920,9 @@ const MoonEngine = (function () {
     cx, cy, rOut
   );
 
-  grad.addColorStop(0.0, "rgba(238,235,214,0.98)");
-  grad.addColorStop(0.82, "rgba(238,235,214,0.95)");
-  grad.addColorStop(1.0, "rgba(238,235,214,0.88)");
+  grad.addColorStop(0.0, "rgba(228, 232, 191, 0.98)");
+  grad.addColorStop(0.82, "rgba(219, 215, 185, 0.95)");
+  grad.addColorStop(1.0, "rgba(205, 201, 174, 0.92)");
 
   outCtx.save();
   outCtx.beginPath();
