@@ -53,7 +53,7 @@ let leafFade = {
   active: false,
   idx: -1,          // ★どの葉をフェードするか
   startAt: 0,
-  dur: 600,
+  dur: 450,
 };
 
 function startLeafFade(idx) {
@@ -5624,7 +5624,7 @@ const LastDoorEngine = (function () {
   ctx.lineCap = "round";
   ctx.strokeStyle = "#000";
   ctx.fillStyle = "#000";
-  ctx.lineWidth = Math.max(2.8, rawCanvas.width * 0.0038);
+  ctx.lineWidth = Math.max(3.0, rawCanvas.width * 0.0045);
 
   // ===== ドアの大枠 =====
   ctx.strokeRect(po.x, po.y, so.w, so.h);
