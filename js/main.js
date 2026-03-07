@@ -5577,7 +5577,7 @@ const LastDoorEngine = (function () {
   // 初期角度は上向きやや左寄り
   let angleRad = degToRad(-95);
   let targetAngleRad = degToRad(-95);  // 目標角度
-  const angleEase = 0.12;              // 0〜1 小さいほどゆっくり
+  const angleEase = 0.7;              // 0〜1 小さいほどゆっくり
   const MIN_ANGLE = degToRad(-165);
   const MAX_ANGLE = degToRad(-15);
 
