@@ -486,8 +486,8 @@ body {
   left: auto !important;
 
   top:    calc(220px * var(--s));
-  right:  calc(160px * var(--s));
-  width:  calc(520px * var(--s));
+  right:  calc(150px * var(--s));
+  width:  calc(560px * var(--s));
   height: calc(760px * var(--s));
 
   padding: 0;
@@ -511,18 +511,6 @@ body {
   line-height: 1.9;
   letter-spacing: 0.01em;
   color: #111;
-}
-
-@media (max-width: 768px) and (hover: none) and (pointer: coarse) {
-  #book-text {
-    right: calc(145px * var(--s));
-    width: calc(550px * var(--s));
-  }
-
-  .poem-vertical {
-    right: calc(110px * var(--s));
-    font-size: calc(23px * var(--s));
-  }
 }
 
 #book-ill-wrap{
