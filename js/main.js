@@ -841,8 +841,8 @@ const EyeHandEngine = (function () {
     if (!outCanvas || pointerBound) return;
     pointerBound = true;
 
-    outCanvas.style.touchAction = "none";
-    outCanvas.style.pointerEvents = "auto";
+    outCanvas.style.touchAction = "pinch-zoom";
+    outCanvas.style.pointerEvents = "none";
 
     function onDown(e) {
       if (!active) return;
@@ -1493,8 +1493,8 @@ const OxGameEngine = (function () {
     if (!outCanvas || pointerBound) return;
     pointerBound = true;
 
-    outCanvas.style.touchAction = "none";
-    outCanvas.style.pointerEvents = "auto";
+    outCanvas.style.touchAction = "pinch-zoom";
+    outCanvas.style.pointerEvents = "none";
 
     function onDown(e) {
       if (!active) return;
@@ -7363,8 +7363,8 @@ const ChipsEngine = (function () {
     if (!outCanvas || pointerBound) return;
     pointerBound = true;
 
-    outCanvas.style.touchAction = "none";
-    outCanvas.style.pointerEvents = "auto";
+    outCanvas.style.touchAction = "pinch-zoom";
+    outCanvas.style.pointerEvents = "none";
 
     function onDown(e) {
       if (!active) return;
