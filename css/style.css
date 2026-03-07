@@ -494,11 +494,12 @@ body {
   box-sizing: border-box;
 }
 
+
 /* 縦書き本文（サイズもスケール追従） */
 .poem-vertical{
-  position: absolute;                 /* ★追加 */
-  top: 0;                             /* ★追加：上端固定 */
-  right: calc(120px * var(--s));       /* ★追加：開始列の固定位置（調整ポイント） */
+  position: absolute;
+  top: 0;
+  right: calc(120px * var(--s));
 
   writing-mode: vertical-rl;
   text-orientation: upright;
@@ -510,6 +511,18 @@ body {
   line-height: 1.9;
   letter-spacing: 0.01em;
   color: #111;
+}
+
+@media (max-width: 768px) and (hover: none) and (pointer: coarse) {
+  #book-text {
+    right: calc(145px * var(--s));
+    width: calc(550px * var(--s));
+  }
+
+  .poem-vertical {
+    right: calc(110px * var(--s));
+    font-size: calc(23px * var(--s));
+  }
 }
 
 #book-ill-wrap{
