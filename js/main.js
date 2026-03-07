@@ -75,6 +75,8 @@ let chipsDragStartX = 0;
 let chipsDragStartY = 0;
 let chipsActiveItemIndex = -1;
 
+let moonDraggingViaHit = false;
+
 // =====================
 // DOM参照
 // =====================
@@ -139,6 +141,9 @@ const chipsHitLayer = document.getElementById("chips-hit-layer");
 const chipsItemHitButtons = Array.from(document.querySelectorAll("#chips-hit-layer .chips-item-hit"));
 const chipsBagHit = document.getElementById("chips-bag-hit");
 const chipsAdCloseHitButtons = Array.from(document.querySelectorAll("#chips-hit-layer .chips-ad-close-hit"));
+
+const moonHitLayer = document.getElementById("moon-hit-layer");
+const moonDragHit = document.getElementById("moon-drag-hit");
 
 // =====================
 // 画像を先読み
@@ -5315,97 +5320,100 @@ const MoonEngine = (function () {
     raf = requestAnimationFrame(loop);
   }
 
+  function getMoonRectDesign() {
+  return {
+    x: moon.cx - moon.r,
+    y: moon.cy - moon.r,
+    w: moon.r * 2,
+    h: moon.r * 2
+  };
+}
+
+function beginDragFromClient(clientX, clientY) {
+  if (!active || !outCanvas || texLocked) return false;
+
+  const rect = outCanvas.getBoundingClientRect();
+  const sx = outCanvas.width / rect.width;
+  const sy = outCanvas.height / rect.height;
+
+  const pxRaw = (clientX - rect.left) * sx * fxScale;
+  const pyRaw = (clientY - rect.top) * sy * fxScale;
+  const d = rawToDesign(pxRaw, pyRaw);
+
+  dragging = true;
+  grabDx = d.xD;
+  grabDy = d.yD;
+
+  dragStartTexOffsetX = texOffsetX;
+  dragStartTexOffsetY = texOffsetY;
+
+  return true;
+}
+
+function moveDragFromClient(clientX, clientY) {
+  if (!active || !outCanvas || !dragging) return;
+  if (texLocked) return;
+
+  const rect = outCanvas.getBoundingClientRect();
+  const sx = outCanvas.width / rect.width;
+  const sy = outCanvas.height / rect.height;
+
+  const pxRaw = (clientX - rect.left) * sx * fxScale;
+  const pyRaw = (clientY - rect.top) * sy * fxScale;
+  const d = rawToDesign(pxRaw, pyRaw);
+
+  const maxOffsetX = Math.max(0, (texWDesign - moon.r * 2) / 2);
+  const maxOffsetY = Math.max(0, (texHDesign - moon.r * 2) / 2);
+
+  const nextOffsetX = dragStartTexOffsetX + (d.xD - grabDx);
+  const nextOffsetY = dragStartTexOffsetY + (d.yD - grabDy);
+
+  const clampedX = clamp(nextOffsetX, -maxOffsetX, maxOffsetX);
+  const clampedY = clamp(nextOffsetY, -maxOffsetY, maxOffsetY);
+
+  texOffsetX = clampedX;
+  texOffsetY = clampedY;
+
+  if (clampedX !== nextOffsetX) {
+    texLocked = true;
+    dragging = false;
+  }
+}
+
+function endDrag() {
+  dragging = false;
+}
+
   function bindPointer() {
-    if (!outCanvas || pointerBound) return;
-    pointerBound = true;
+  if (!outCanvas || pointerBound) return;
+  pointerBound = true;
 
-    outCanvas.style.touchAction = "none";
-    outCanvas.style.pointerEvents = "auto";
+  // canvas 自体はジェスチャーを邪魔しない
+  outCanvas.style.touchAction = "pinch-zoom";
+  outCanvas.style.pointerEvents = "none";
 
-    function onDown(e) {
-    if (!active) return;
-    if (texLocked) return; // ロック後はもうつかめない
-
-    const p = canvasPointFromEvent(e, outCanvas);
-    const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
-    const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
-    const d = rawToDesign(pxRaw, pyRaw);
-
-    const dx = d.xD - moon.cx;
-    const dy = d.yD - moon.cy;
-
-    if ((dx * dx + dy * dy) <= moon.r * moon.r) {
-      dragging = true;
-
-      // ドラッグ開始時のポインタ位置
-      grabDx = d.xD;
-      grabDy = d.yD;
-
-      // その時点のテクスチャー位置を保存
-      dragStartTexOffsetX = texOffsetX;
-      dragStartTexOffsetY = texOffsetY;
-
-      try { outCanvas.setPointerCapture(e.pointerId); } catch (_) {}
-    }
-  }
-
-    function onMove(e) {
-    if (!active || !dragging) return;
-    if (texLocked) return;
-
-    const p = canvasPointFromEvent(e, outCanvas);
-    const pxRaw = p.x * (rawCanvas.width / outCanvas.width);
-    const pyRaw = p.y * (rawCanvas.height / outCanvas.height);
-    const d = rawToDesign(pxRaw, pyRaw);
-
-    // 画像の端まで見せるための可動範囲
-    const maxOffsetX = Math.max(0, (texWDesign - moon.r * 2) / 2);
-    const maxOffsetY = Math.max(0, (texHDesign - moon.r * 2) / 2);
-
-    // 開始時点のoffsetに差分を足して候補値を作る
-    const nextOffsetX = dragStartTexOffsetX + (d.xD - grabDx);
-    const nextOffsetY = dragStartTexOffsetY + (d.yD - grabDy);
-
-    // clampして実際の値を決める
-    const clampedX = clamp(nextOffsetX, -maxOffsetX, maxOffsetX);
-    const clampedY = clamp(nextOffsetY, -maxOffsetY, maxOffsetY);
-
-    texOffsetX = clampedX;
-    texOffsetY = clampedY;
-
-    // 左右端に到達したら、その位置で永久ロック
-    if (clampedX !== nextOffsetX) {
-      texLocked = true;
-      dragging = false;
-    }
-  }
-
-    function onUp(e) {
-      dragging = false;
-      try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
-    }
-
-    outCanvas.addEventListener("pointerdown", onDown);
-    outCanvas.addEventListener("pointermove", onMove);
-    outCanvas.addEventListener("pointerup", onUp);
-    outCanvas.addEventListener("pointercancel", onUp);
-
-    bindPointer._onDown = onDown;
-    bindPointer._onMove = onMove;
-    bindPointer._onUp = onUp;
-  }
+  bindPointer._onDown = null;
+  bindPointer._onMove = null;
+  bindPointer._onUp = null;
+}
 
   function unbindPointer() {
-    if (!outCanvas || !pointerBound) return;
+  if (!outCanvas || !pointerBound) return;
 
+  if (bindPointer._onDown) {
     outCanvas.removeEventListener("pointerdown", bindPointer._onDown);
+  }
+  if (bindPointer._onMove) {
     outCanvas.removeEventListener("pointermove", bindPointer._onMove);
+  }
+  if (bindPointer._onUp) {
     outCanvas.removeEventListener("pointerup", bindPointer._onUp);
     outCanvas.removeEventListener("pointercancel", bindPointer._onUp);
-
-    bindPointer._onDown = bindPointer._onMove = bindPointer._onUp = null;
-    pointerBound = false;
   }
+
+  bindPointer._onDown = bindPointer._onMove = bindPointer._onUp = null;
+  pointerBound = false;
+}
 
   return {
     async start(canvasEl, opts = {}) {
@@ -5472,6 +5480,13 @@ const MoonEngine = (function () {
       outCtx = null;
       dragging = false;
       lastAsciiAt = 0;
+    },
+
+    beginDragFromClient,
+    moveDragFromClient,
+    endDrag,
+    getMoonRect() {
+      return getMoonRectDesign();
     },
 
     setMode(nextMode) {
@@ -8151,7 +8166,6 @@ function closeBook() {
   FireworksEngine.stop();
   LastDoorEngine.stop();
   if (typeof ChipsEngine !== "undefined") ChipsEngine.stop();
-  if (typeof MoonEngine !== "undefined") MoonEngine.stop();
   IllEngine.stop();
   if (illCanvas) illCanvas.hidden = true;
   if (illCanvas2) illCanvas2.hidden = true;
@@ -8160,6 +8174,8 @@ function closeBook() {
   if (eyehandHitLayer) eyehandHitLayer.hidden = true;
   if (oxgameHitLayer) oxgameHitLayer.hidden = true;
   if (chipsHitLayer) chipsHitLayer.hidden = true;
+  if (moonHitLayer) moonHitLayer.hidden = true;
+  if (typeof MoonEngine !== "undefined") MoonEngine.stop();
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -8234,6 +8250,17 @@ chipsItemHitButtons.forEach((btn) => {
     chipsDragStartY = e.clientY;
   });
 });
+
+if (moonDragHit) {
+  moonDragHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const started = MoonEngine.beginDragFromClient(e.clientX, e.clientY);
+    if (!started) return;
+
+    moonDraggingViaHit = true;
+  });
+}
 
 window.addEventListener("pointerup", (e) => {
   if (!chipsDraggingViaHit) return;
@@ -8331,6 +8358,37 @@ window.addEventListener("pointercancel", () => {
   if (!eyehandDraggingViaHit) return;
   eyehandDraggingViaHit = false;
   EyeHandEngine.endDrag();
+}, { passive: true });
+
+if (moonDragHit) {
+  moonDragHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const started = MoonEngine.beginDragFromClient(e.clientX, e.clientY);
+    if (!started) return;
+
+    moonDraggingViaHit = true;
+  });
+}
+
+window.addEventListener("pointermove", (e) => {
+  if (!moonDraggingViaHit) return;
+  MoonEngine.moveDragFromClient(e.clientX, e.clientY);
+  updateMoonHitbox();
+}, { passive: true });
+
+window.addEventListener("pointerup", () => {
+  if (!moonDraggingViaHit) return;
+  moonDraggingViaHit = false;
+  MoonEngine.endDrag();
+  updateMoonHitbox();
+}, { passive: true });
+
+window.addEventListener("pointercancel", () => {
+  if (!moonDraggingViaHit) return;
+  moonDraggingViaHit = false;
+  MoonEngine.endDrag();
+  updateMoonHitbox();
 }, { passive: true });
 
 // =====================
@@ -8761,29 +8819,33 @@ if (page.ill === "chips") {
   });
 
   } else if (page.ill === "moon") {
-    illCanvas.hidden = false;
-    illCanvas.style.pointerEvents = "auto";
+  illCanvas.hidden = false;
+  illCanvas.style.pointerEvents = "none";
 
-    if (illCanvas2) {
-      illCanvas2.hidden = true;
-      illCanvas2.style.pointerEvents = "none";
-    }
+  if (moonHitLayer) moonHitLayer.hidden = false;
 
+  if (illCanvas2) {
+    illCanvas2.hidden = true;
+    illCanvas2.style.pointerEvents = "none";
+  }
+
+  requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        MoonEngine.start(illCanvas, {
-          mode,
-          fxScale: 0.55,
-          asciiFps: 12,
+      MoonEngine.start(illCanvas, {
+        mode,
+        fxScale: 0.55,
+        asciiFps: 12,
 
-          // 月の初期位置と動ける範囲
-          cx: 960,
-          cy: 540,
-          r: 250,
-          verticalRange: 80
-        }).catch(console.error);
-      });
+        // 月の初期位置と動ける範囲
+        cx: 960,
+        cy: 540,
+        r: 250,
+        verticalRange: 80
+      }).then(() => {
+        updateMoonHitbox();
+      }).catch(console.error);
     });
+  });
 
 
 } else if (page.ill === "eyehand") {
@@ -9102,11 +9164,44 @@ function updateEyehandHitbox() {
   eyehandHitLayer.hidden = false;
 }
 
+function updateMoonHitbox() {
+  if (!moonHitLayer || !moonDragHit) return;
+
+  if (!MoonEngine.active) {
+    moonHitLayer.hidden = true;
+    return;
+  }
+
+  const r = MoonEngine.getMoonRect ? MoonEngine.getMoonRect() : null;
+  if (!r) {
+    moonHitLayer.hidden = true;
+    return;
+  }
+
+  moonHitLayer.hidden = false;
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  const left = ((r.x - CROP_X) / CROP_W) * 100;
+  const top = ((r.y - CROP_Y) / CROP_H) * 100;
+  const width = (r.w / CROP_W) * 100;
+  const height = (r.h / CROP_H) * 100;
+
+  moonDragHit.style.left = left + "%";
+  moonDragHit.style.top = top + "%";
+  moonDragHit.style.width = width + "%";
+  moonDragHit.style.height = height + "%";
+}
+
 function tickHotspots() {
   updateCandleHitbox();
   updateEyehandHitbox();
   updateOxgameHitboxes();
   updateChipsHitboxes();
+  updateMoonHitbox();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();

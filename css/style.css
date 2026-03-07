@@ -753,3 +753,29 @@ button {
   z-index: 4;   /* ← ×は袋より上 */
 }
 
+/* =====================
+   Moon hit layer
+===================== */
+#moon-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;
+  pointer-events: none;
+}
+
+#moon-hit-layer[hidden]{
+  display: none !important;
+}
+
+#moon-drag-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
