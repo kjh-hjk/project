@@ -486,8 +486,8 @@ body {
   left: auto !important;
 
   top:    calc(220px * var(--s));
-  right:  calc(150px * var(--s));
-  width:  calc(560px * var(--s));
+  right:  calc(200px * var(--s));
+  width:  calc(510px * var(--s));
   height: calc(760px * var(--s));
 
   padding: 0;
@@ -499,7 +499,7 @@ body {
 .poem-vertical{
   position: absolute;
   top: 0;
-  right: calc(120px * var(--s));
+  right: calc(80px * var(--s));
 
   writing-mode: vertical-rl;
   text-orientation: upright;
