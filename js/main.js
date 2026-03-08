@@ -151,6 +151,10 @@ const lastdoorHitLayer = document.getElementById("lastdoor-hit-layer");
 const lastdoorFlashlightHit = document.getElementById("lastdoor-flashlight-hit");
 const lastdoorBagHit = document.getElementById("lastdoor-bag-hit");
 const lastdoorKnobHit = document.getElementById("lastdoor-knob-hit");
+
+const stringsHitLayer = document.getElementById("strings-hit-layer");
+const stringsAreaHit = document.getElementById("strings-area-hit");
+
 // =====================
 // 画像を先読み
 // =====================
@@ -2031,54 +2035,49 @@ const StringBundleEngine = (function () {
     }
   }
 
-  function bindPointer() {
-  if (!outCanvas || pointerBound) return;
-  pointerBound = true;
-
-  outCanvas.style.touchAction = "none";
-  outCanvas.style.pointerEvents = "auto";
-
-  function updatePointer(e) {
+    function setPointerFromClient(clientX, clientY) {
     if (!active || !outCanvas) return;
 
-    const p = canvasPointFromEvent(e, outCanvas);
-    const x = p.x * fxScale;
-    const y = p.y * fxScale;
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const px = (clientX - rect.left) * sx * fxScale;
+    const py = (clientY - rect.top) * sy * fxScale;
 
     prevPX = pointerX;
     prevPY = pointerY;
-    pointerX = x;
-    pointerY = y;
-
-    vX = (pointerX - prevPX);
-    vY = (pointerY - prevPY);
+    pointerX = px;
+    pointerY = py;
+    vX = pointerX - prevPX;
+    vY = pointerY - prevPY;
+    pointerBound = true;
   }
 
-  function onDown(e) {
-    if (!active) return;
-    updatePointer(e);
-
-    try { outCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+  function clearPointer() {
+    pointerBound = false;
+    vX = 0;
+    vY = 0;
   }
 
-  function onMove(e) {
-    if (!active) return;
-    updatePointer(e);
+  function getRect() {
+    if (!active || !designRect) return null;
+    return {
+      x: designRect.x,
+      y: designRect.y,
+      w: designRect.w,
+      h: designRect.h
+    };
   }
 
-  function onUp(e) {
-    try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      function bindPointer() {
+    if (!outCanvas) return;
+
+    outCanvas.style.pointerEvents = "none";
+    outCanvas.style.touchAction = "pinch-zoom";
+
+    bindPointer._onDown = null;
   }
-
-  outCanvas.addEventListener("pointerdown", onDown, { passive: true });
-  outCanvas.addEventListener("pointermove", onMove, { passive: true });
-  outCanvas.addEventListener("pointerup", onUp, { passive: true });
-  outCanvas.addEventListener("pointercancel", onUp, { passive: true });
-
-  bindPointer._onDown = onDown;
-  bindPointer._onMove = onMove;
-  bindPointer._onUp = onUp;
-}
 
 function unbindPointer() {
   if (!outCanvas || !pointerBound) return;
@@ -2385,6 +2384,10 @@ function unbindPointer() {
       mode = nextMode;
       lastAsciiAt = 0;
     },
+
+    setPointerFromClient,
+    clearPointer,
+    getRect,
 
     resize() {
       resizeCanvases();
@@ -8225,6 +8228,7 @@ function closeBook() {
   if (moonHitLayer) moonHitLayer.hidden = true;
   if (lastdoorHitLayer) lastdoorHitLayer.hidden = true;
   if (typeof MoonEngine !== "undefined") MoonEngine.stop();
+  if (stringsHitLayer) stringsHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -8486,6 +8490,33 @@ window.addEventListener("pointercancel", () => {
   LastDoorEngine.endAimDrag();
   updateLastdoorHitboxes();
 }, { passive: true });
+
+if (stringsAreaHit) {
+  stringsAreaHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    StringBundleEngine.setPointerFromClient(e.clientX, e.clientY);
+  });
+
+  stringsAreaHit.addEventListener("pointermove", (e) => {
+    StringBundleEngine.setPointerFromClient(e.clientX, e.clientY);
+  }, { passive: true });
+
+  stringsAreaHit.addEventListener("pointerenter", (e) => {
+    StringBundleEngine.setPointerFromClient(e.clientX, e.clientY);
+  }, { passive: true });
+
+  stringsAreaHit.addEventListener("pointerleave", () => {
+    StringBundleEngine.clearPointer();
+  }, { passive: true });
+
+  stringsAreaHit.addEventListener("pointerup", () => {
+    StringBundleEngine.clearPointer();
+  }, { passive: true });
+
+  stringsAreaHit.addEventListener("pointercancel", () => {
+    StringBundleEngine.clearPointer();
+  }, { passive: true });
+}
 
 // =====================
 // まばたき/暗転/ページめくり
@@ -9006,7 +9037,9 @@ if (page.ill === "chips") {
 
     } else if (page.ill === "strings") {
       illCanvas.hidden = false;
-      illCanvas.style.pointerEvents = "auto";
+      illCanvas.style.pointerEvents = "none";
+      illCanvas.style.touchAction = "pinch-zoom";
+      if (stringsHitLayer) stringsHitLayer.hidden = false;
 
       const mode = lampOn ? "dither" : "ascii";
 
@@ -9016,15 +9049,8 @@ if (page.ill === "chips") {
             mode,
             fxScale: 0.55,
             asciiFps: 12,
-
-            // 可動域（本の白いエリア内に収めるならこれ）
             bounds: { x: 228, y: 129, w: 1453, h: 854 },
-
-            // ✅ 弦の“束”を置く矩形（ここだけは Figma で決めた座標に差し替え推奨）
-            // 例：左ページ中央あたりに縦長の領域
             rect: { x: 320, y: 170, w: 520, h: 820 },
-
-            // 本数
             strands: 10
           }).catch(console.error);
         });
@@ -9364,6 +9390,49 @@ function updateLastdoorHitboxes() {
   lastdoorHitLayer.hidden = !hasAny;
 }
 
+function updateStringsHitbox() {
+  if (!stringsHitLayer || !stringsAreaHit) return;
+
+  if (scene !== "book") {
+    stringsHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "strings") {
+    stringsHitLayer.hidden = true;
+    return;
+  }
+
+  if (!StringBundleEngine.active) {
+    stringsHitLayer.hidden = true;
+    return;
+  }
+
+  const r = StringBundleEngine.getRect ? StringBundleEngine.getRect() : null;
+  if (!r) {
+    stringsHitLayer.hidden = true;
+    return;
+  }
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  const left = ((r.x - CROP_X) / CROP_W) * 100;
+  const top = ((r.y - CROP_Y) / CROP_H) * 100;
+  const width = (r.w / CROP_W) * 100;
+  const height = (r.h / CROP_H) * 100;
+
+  stringsAreaHit.style.left = left + "%";
+  stringsAreaHit.style.top = top + "%";
+  stringsAreaHit.style.width = width + "%";
+  stringsAreaHit.style.height = height + "%";
+
+  stringsHitLayer.hidden = false;
+}
+
 function tickHotspots() {
   updateCandleHitbox();
   updateEyehandHitbox();
@@ -9371,6 +9440,7 @@ function tickHotspots() {
   updateChipsHitboxes();
   updateMoonHitbox();
   updateLastdoorHitboxes();
+  updateStringsHitbox();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();

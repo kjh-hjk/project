@@ -822,3 +822,29 @@ button {
   z-index: 2;
 }
 
+/* =====================
+   Strings hit layer
+===================== */
+#strings-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;
+  pointer-events: none;
+}
+
+#strings-hit-layer[hidden]{
+  display: none !important;
+}
+
+#strings-area-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
