@@ -155,6 +155,8 @@ const lastdoorKnobHit = document.getElementById("lastdoor-knob-hit");
 const stringsHitLayer = document.getElementById("strings-hit-layer");
 const stringsAreaHit = document.getElementById("strings-area-hit");
 
+const boxspidersHitLayer = document.getElementById("boxspiders-hit-layer");
+const boxspidersAreaHit = document.getElementById("boxspiders-area-hit");
 // =====================
 // 画像を先読み
 // =====================
@@ -3116,51 +3118,61 @@ if (boxState === "opening" || boxState === "open") {
     }
   }
 
-  function bindPointer() {
-  if (pointerBound) return;
-  pointerBound = true;
+  function tapFromClient(clientX, clientY) {
+    if (!active || !outCanvas) return false;
+    if (boxState !== "closed") return false;
 
-  function onMove(e) {
-    if (!active || !outCanvas) return;
-    pointerInside = true;
-    pointerLastAt = performance.now();
-    const p = canvasPointFromEvent(e, outCanvas);
-    pointerX = p.x * fxScale;
-    pointerY = p.y * fxScale;
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const px = (clientX - rect.left) * sx * fxScale;
+    const py = (clientY - rect.top) * sy * fxScale;
+
+    if (!hitBoxClosed(px, py)) return false;
+
+    openBox();
+    return true;
   }
 
-  function onDown(e) {
-    if (!active || !outCanvas) return;
-    if (openedOnce) return;
+  function setPointerFromClient(clientX, clientY) {
+  if (!active || !outCanvas) return;
 
-    const p = canvasPointFromEvent(e, outCanvas);
-    const px = p.x * fxScale, py = p.y * fxScale;
+  const rect = outCanvas.getBoundingClientRect();
+  const sx = outCanvas.width / rect.width;
+  const sy = outCanvas.height / rect.height;
 
-    if (hitBoxClosed(px, py)) openBox();
-  }
+  const px = (clientX - rect.left) * sx * fxScale;
+  const py = (clientY - rect.top) * sy * fxScale;
 
-  function onEnter() {
-    pointerInside = true;
-    pointerLastAt = performance.now();
-  }
-
-  function onLeave() {
-    pointerInside = false;
-  }
-
-  outCanvas.addEventListener("pointerenter", onEnter);
-  outCanvas.addEventListener("pointerleave", onLeave);
-
-  bindPointer._onEnter = onEnter;
-  bindPointer._onLeave = onLeave;
-
-  // ✅ ここに追加！！（move/down の登録）
-  outCanvas.addEventListener("pointermove", onMove, { passive: true });
-  outCanvas.addEventListener("pointerdown", onDown);
-
-  bindPointer._onMove = onMove;
-  bindPointer._onDown = onDown;
+  pointerX = px;
+  pointerY = py;
+  pointerInside = true;
+  pointerLastAt = performance.now();
 }
+
+function clearPointer() {
+  pointerInside = false;
+}
+
+  function getBoxRect() {
+    if (!active || !boxRectD) return null;
+    return {
+      x: boxRectD.x,
+      y: boxRectD.y,
+      w: boxRectD.w,
+      h: boxRectD.h
+    };
+  }
+
+  function bindPointer() {
+    if (!outCanvas) return;
+
+    outCanvas.style.pointerEvents = "none";
+    outCanvas.style.touchAction = "pinch-zoom";
+
+    bindPointer._onDown = null;
+  }
 
   function unbindPointer() {
   if (!outCanvas) return;
@@ -3246,6 +3258,11 @@ if (boxState === "opening" || boxState === "open") {
       mode = nextMode || "dither";
       lastAsciiAt = 0;
     },
+
+    tapFromClient,
+    getBoxRect,
+    setPointerFromClient,
+    clearPointer,
 
     resize() {
       // 固定レンダーなので何もしない
@@ -7723,7 +7740,7 @@ const PAGES = {
   },
   2: {
     bg: "open",
-    ill: "spiders",   // ← 挿絵を出すページ
+    ill: "boxspiders",   // ← 挿絵を出すページ
     text: `けれど一度白く濁った一面は
 いつのまにか綻び澄んだ姿を見せ
 私の体を囲う糸は次第に解けてゆく
@@ -8229,6 +8246,7 @@ function closeBook() {
   if (lastdoorHitLayer) lastdoorHitLayer.hidden = true;
   if (typeof MoonEngine !== "undefined") MoonEngine.stop();
   if (stringsHitLayer) stringsHitLayer.hidden = true;
+  if (boxspidersHitLayer) boxspidersHitLayer.hidden = true;
   setBookSceneEnabled(false);
   bookScene.hidden = true;
   scene = "desk";
@@ -8515,6 +8533,38 @@ if (stringsAreaHit) {
 
   stringsAreaHit.addEventListener("pointercancel", () => {
     StringBundleEngine.clearPointer();
+  }, { passive: true });
+}
+
+if (boxspidersAreaHit) {
+  boxspidersAreaHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    // まず箱クリック判定
+    BoxSpidersEngine.tapFromClient(e.clientX, e.clientY);
+
+    // そのうえで追従用の座標も更新
+    BoxSpidersEngine.setPointerFromClient(e.clientX, e.clientY);
+  });
+
+  boxspidersAreaHit.addEventListener("pointermove", (e) => {
+    BoxSpidersEngine.setPointerFromClient(e.clientX, e.clientY);
+  }, { passive: true });
+
+  boxspidersAreaHit.addEventListener("pointerenter", (e) => {
+    BoxSpidersEngine.setPointerFromClient(e.clientX, e.clientY);
+  }, { passive: true });
+
+  boxspidersAreaHit.addEventListener("pointerleave", () => {
+    BoxSpidersEngine.clearPointer();
+  }, { passive: true });
+
+  boxspidersAreaHit.addEventListener("pointerup", () => {
+    BoxSpidersEngine.clearPointer();
+  }, { passive: true });
+
+  boxspidersAreaHit.addEventListener("pointercancel", () => {
+    BoxSpidersEngine.clearPointer();
   }, { passive: true });
 }
 
@@ -9056,9 +9106,11 @@ if (page.ill === "chips") {
         });
       });
 
-    } else if (page.ill === "spiders") {
+    } else if (page.ill === "boxspiders") {
       illCanvas.hidden = false;
-      illCanvas.style.pointerEvents = "auto";
+      illCanvas.style.pointerEvents = "none";
+      illCanvas.style.touchAction = "pinch-zoom";
+      if (boxspidersHitLayer) boxspidersHitLayer.hidden = false;
 
       const mode = lampOn ? "dither" : "ascii";
 
@@ -9068,19 +9120,12 @@ if (page.ill === "chips") {
             mode,
             fxScale: 0.55,
             asciiFps: 12,
-
-            // 触れる範囲は本の白枠のままでOK
-            bounds: { x: 228, y: 129, w: 1453, h: 854 },
-
-            // ✅ ベース箱は固定（サイズ変化しない）
-            boxRect: { x: 400, y: 650, w: 420, h: 220 },
-
-            // 「一回だけ開く」を反映
             openedOnce: spidersOpenedOnce,
+            onOpened: () => { spidersOpenedOnce = true; },
 
-            // 開いたらフラグ更新
-            onOpened: () => { spidersOpenedOnce = true; }
-          }).catch(console.error);
+            // まずは今の箱矩形
+            boxRect: { x: 320, y: 650, w: 420, h: 220 }
+          });
         });
       });
 
@@ -9433,6 +9478,39 @@ function updateStringsHitbox() {
   stringsHitLayer.hidden = false;
 }
 
+function updateBoxspidersHitbox() {
+  if (!boxspidersHitLayer || !boxspidersAreaHit) return;
+
+  if (scene !== "book") {
+    boxspidersHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "boxspiders") {
+    boxspidersHitLayer.hidden = true;
+    return;
+  }
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  // 画像の赤い四角に近い固定範囲
+  const HIT_X = 300;
+  const HIT_Y = 150;
+  const HIT_W = 580;
+  const HIT_H = 750;
+
+  boxspidersAreaHit.style.left = ((HIT_X - CROP_X) / CROP_W) * 100 + "%";
+  boxspidersAreaHit.style.top = ((HIT_Y - CROP_Y) / CROP_H) * 100 + "%";
+  boxspidersAreaHit.style.width = (HIT_W / CROP_W) * 100 + "%";
+  boxspidersAreaHit.style.height = (HIT_H / CROP_H) * 100 + "%";
+
+  boxspidersHitLayer.hidden = false;
+}
+
 function tickHotspots() {
   updateCandleHitbox();
   updateEyehandHitbox();
@@ -9441,6 +9519,7 @@ function tickHotspots() {
   updateMoonHitbox();
   updateLastdoorHitboxes();
   updateStringsHitbox();
+  updateBoxspidersHitbox();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();
