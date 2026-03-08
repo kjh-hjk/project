@@ -781,3 +781,44 @@ button {
   -webkit-tap-highlight-color: transparent;
   outline: none;
 }
+
+/* =====================
+   LastDoor hit layer
+===================== */
+#lastdoor-hit-layer{
+  position: absolute;
+  inset: 0;
+  z-index: 96;
+  pointer-events: none;
+}
+
+#lastdoor-hit-layer[hidden]{
+  display: none !important;
+}
+
+#lastdoor-flashlight-hit,
+#lastdoor-bag-hit,
+#lastdoor-knob-hit{
+  position: absolute;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+
+#lastdoor-flashlight-hit{
+  cursor: grab;
+  touch-action: none;
+  z-index: 1;
+}
+
+#lastdoor-bag-hit,
+#lastdoor-knob-hit{
+  cursor: pointer;
+  touch-action: manipulation;
+  z-index: 2;
+}
+

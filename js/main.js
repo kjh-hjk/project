@@ -77,6 +77,8 @@ let chipsActiveItemIndex = -1;
 
 let moonDraggingViaHit = false;
 
+let lastdoorDraggingViaHit = false;
+
 // =====================
 // DOM参照
 // =====================
@@ -145,6 +147,10 @@ const chipsAdCloseHitButtons = Array.from(document.querySelectorAll("#chips-hit-
 const moonHitLayer = document.getElementById("moon-hit-layer");
 const moonDragHit = document.getElementById("moon-drag-hit");
 
+const lastdoorHitLayer = document.getElementById("lastdoor-hit-layer");
+const lastdoorFlashlightHit = document.getElementById("lastdoor-flashlight-hit");
+const lastdoorBagHit = document.getElementById("lastdoor-bag-hit");
+const lastdoorKnobHit = document.getElementById("lastdoor-knob-hit");
 // =====================
 // 画像を先読み
 // =====================
@@ -6275,73 +6281,106 @@ const LastDoorEngine = (function () {
     targetAngleRad = clamp(a, MIN_ANGLE, MAX_ANGLE);
   }
 
-  function bindPointer() {
+    function beginAimDragFromClient(clientX, clientY) {
+    if (!active || !outCanvas || vanished) return false;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const pxRaw = (clientX - rect.left) * sx * fxScale;
+    const pyRaw = (clientY - rect.top) * sy * fxScale;
+    const d = rawToDesign(pxRaw, pyRaw);
+
+    if (!pointInFlashlightHit(d.xD, d.yD)) return false;
+
+    draggingAim = true;
+    setAngleFromPointer(pxRaw, pyRaw);
+    return true;
+  }
+
+  function moveAimDragFromClient(clientX, clientY) {
+    if (!active || !outCanvas || vanished) return;
+    if (!draggingAim) return;
+
+    const rect = outCanvas.getBoundingClientRect();
+    const sx = outCanvas.width / rect.width;
+    const sy = outCanvas.height / rect.height;
+
+    const pxRaw = (clientX - rect.left) * sx * fxScale;
+    const pyRaw = (clientY - rect.top) * sy * fxScale;
+
+    setAngleFromPointer(pxRaw, pyRaw);
+  }
+
+  function endAimDrag() {
+    draggingAim = false;
+  }
+
+  function tapBag() {
+    if (!active || vanished) return false;
+
+    const bagRect = bagOpened ? layout.bagOpen : layout.bagClosed;
+    if (bagOpened) return false;
+    if (!rectHitByBeam(bagRect)) return false;
+
+    bagOpened = true;
+    startLetterDrop();
+    return true;
+  }
+
+  function tapKnob() {
+    if (!active || vanished) return false;
+
+    const knobRect = getKnobRect();
+    if (!knobRect) return false;
+    if (!rectHitByBeam(knobRect)) return false;
+
+    if (letterDropped && !doorOpened && !doorOpening) {
+      doorOpening = true;
+      return true;
+    }
+
+    if (doorOpened && !vanishing) {
+      vanishing = true;
+      return true;
+    }
+
+    return false;
+  }
+
+  function getFlashlightRect() {
+    if (!active || !layout || vanished) return null;
+    return { ...layout.flashlight };
+  }
+
+  function getBagRect() {
+    if (!active || !layout || vanished) return null;
+    if (bagOpened) return null;
+    return { ...(bagOpened ? layout.bagOpen : layout.bagClosed) };
+  }
+
+   function getKnobRect() {
+    if (!active || !layout || vanished) return null;
+
+    return {
+      x: layout.doorOuter.x,
+      y: layout.doorOuter.y,
+      w: layout.doorOuter.w,
+      h: layout.doorOuter.h
+    };
+  }
+
+    function bindPointer() {
     if (!outCanvas) return;
 
-    outCanvas.style.pointerEvents = "auto";
-    outCanvas.style.touchAction = "none";
+    // canvas 自体はジェスチャーを邪魔しない
+    outCanvas.style.pointerEvents = "none";
+    outCanvas.style.touchAction = "pinch-zoom";
 
-      function onDown(e) {
-      if (!active || vanished) return;
-
-      const p = canvasPointFromEvent(e, outCanvas);
-      const pxRaw = p.x * fxScale;
-      const pyRaw = p.y * fxScale;
-      const d = rawToDesign(pxRaw, pyRaw);
-
-      const bagRect = bagOpened ? layout.bagOpen : layout.bagClosed;
-      const doorRect = layout.doorOuter;
-
-      // 懐中電灯の上を押した時だけドラッグ開始
-      if (pointInFlashlightHit(d.xD, d.yD)) {
-        draggingAim = true;
-        setAngleFromPointer(pxRaw, pyRaw);
-        try { outCanvas.setPointerCapture(e.pointerId); } catch (_) {}
-        return;
-      }
-
-      // カバン
-      if (!bagOpened && pointInRectD(d.xD, d.yD, bagRect) && rectHitByBeam(bagRect)) {
-        bagOpened = true;
-        startLetterDrop();
-        return;
-      }
-
-      // 扉
-      if (pointInRectD(d.xD, d.yD, doorRect) && rectHitByBeam(doorRect)) {
-        if (letterDropped && !doorOpened && !doorOpening) {
-          doorOpening = true;
-          return;
-        } else if (doorOpened && !vanishing) {
-          vanishing = true;
-          return;
-        }
-      }
-    }
-
-    function onMove(e) {
-      if (!active || vanished) return;
-      if (!draggingAim) return;
-
-      const p = canvasPointFromEvent(e, outCanvas);
-      const pxRaw = p.x * fxScale;
-      const pyRaw = p.y * fxScale;
-      setAngleFromPointer(pxRaw, pyRaw);
-    }
-
-    function onUp(e) {
-      draggingAim = false;
-      try { outCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
-    }
-
-    outCanvas.addEventListener("pointerdown", onDown);
-    outCanvas.addEventListener("pointermove", onMove);
-    outCanvas.addEventListener("pointerup", onUp);
-    outCanvas.addEventListener("pointercancel", onUp);
-
-    bindPointer._onDown = onDown;
-    bindPointer._onMove = onMove;
-    bindPointer._onUp = onUp;
+    bindPointer._onDown = null;
+    bindPointer._onMove = null;
+    bindPointer._onUp = null;
   }
 
   function unbindPointer() {
@@ -6430,6 +6469,15 @@ const LastDoorEngine = (function () {
       mode = nextMode || "dither";
       lastAsciiAt = 0;
     },
+
+    beginAimDragFromClient,
+    moveAimDragFromClient,
+    endAimDrag,
+    tapBag,
+    tapKnob,
+    getFlashlightRect,
+    getBagRect,
+    getKnobRect,
 
     resize() {
       // 固定レンダーなので何もしない
@@ -8175,6 +8223,7 @@ function closeBook() {
   if (oxgameHitLayer) oxgameHitLayer.hidden = true;
   if (chipsHitLayer) chipsHitLayer.hidden = true;
   if (moonHitLayer) moonHitLayer.hidden = true;
+  if (lastdoorHitLayer) lastdoorHitLayer.hidden = true;
   if (typeof MoonEngine !== "undefined") MoonEngine.stop();
   setBookSceneEnabled(false);
   bookScene.hidden = true;
@@ -8259,6 +8308,33 @@ if (moonDragHit) {
     if (!started) return;
 
     moonDraggingViaHit = true;
+  });
+}
+
+if (lastdoorFlashlightHit) {
+  lastdoorFlashlightHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+
+    const started = LastDoorEngine.beginAimDragFromClient(e.clientX, e.clientY);
+    if (!started) return;
+
+    lastdoorDraggingViaHit = true;
+  });
+}
+
+if (lastdoorBagHit) {
+  lastdoorBagHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    LastDoorEngine.tapBag();
+    updateLastdoorHitboxes();
+  });
+}
+
+if (lastdoorKnobHit) {
+  lastdoorKnobHit.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    LastDoorEngine.tapKnob();
+    updateLastdoorHitboxes();
   });
 }
 
@@ -8389,6 +8465,26 @@ window.addEventListener("pointercancel", () => {
   moonDraggingViaHit = false;
   MoonEngine.endDrag();
   updateMoonHitbox();
+}, { passive: true });
+
+window.addEventListener("pointermove", (e) => {
+  if (!lastdoorDraggingViaHit) return;
+  LastDoorEngine.moveAimDragFromClient(e.clientX, e.clientY);
+  updateLastdoorHitboxes();
+}, { passive: true });
+
+window.addEventListener("pointerup", () => {
+  if (!lastdoorDraggingViaHit) return;
+  lastdoorDraggingViaHit = false;
+  LastDoorEngine.endAimDrag();
+  updateLastdoorHitboxes();
+}, { passive: true });
+
+window.addEventListener("pointercancel", () => {
+  if (!lastdoorDraggingViaHit) return;
+  lastdoorDraggingViaHit = false;
+  LastDoorEngine.endAimDrag();
+  updateLastdoorHitboxes();
 }, { passive: true });
 
 // =====================
@@ -9008,9 +9104,11 @@ if (page.ill === "chips") {
   // -------------------------
   // ★16ページ：最後の扉
   // -------------------------
-  } else if (page.ill === "lastdoor") {
+    } else if (page.ill === "lastdoor") {
     illCanvas.hidden = false;
-    illCanvas.style.pointerEvents = "auto";
+    illCanvas.style.pointerEvents = "none";
+    illCanvas.style.touchAction = "pinch-zoom";
+    if (lastdoorHitLayer) lastdoorHitLayer.hidden = false;
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -9196,12 +9294,83 @@ function updateMoonHitbox() {
   moonDragHit.style.height = height + "%";
 }
 
+function updateLastdoorHitboxes() {
+  if (!lastdoorHitLayer) return;
+
+  if (scene !== "book") {
+    lastdoorHitLayer.hidden = true;
+    return;
+  }
+
+  const page = PAGES[bookPage] || {};
+  if (page.ill !== "lastdoor") {
+    lastdoorHitLayer.hidden = true;
+    return;
+  }
+
+  if (!LastDoorEngine.active) {
+    lastdoorHitLayer.hidden = true;
+    return;
+  }
+
+  const CROP_X = 228;
+  const CROP_Y = 129;
+  const CROP_W = 1453;
+  const CROP_H = 854;
+
+  let hasAny = false;
+
+  const flashRect = LastDoorEngine.getFlashlightRect ? LastDoorEngine.getFlashlightRect() : null;
+  if (lastdoorFlashlightHit && flashRect) {
+    const padX = 12;
+    const padY = 12;
+
+    lastdoorFlashlightHit.style.left = ((flashRect.x - CROP_X - padX) / CROP_W) * 100 + "%";
+    lastdoorFlashlightHit.style.top = ((flashRect.y - CROP_Y - padY) / CROP_H) * 100 + "%";
+    lastdoorFlashlightHit.style.width = ((flashRect.w + padX * 2) / CROP_W) * 100 + "%";
+    lastdoorFlashlightHit.style.height = ((flashRect.h + padY * 2) / CROP_H) * 100 + "%";
+    lastdoorFlashlightHit.hidden = false;
+    hasAny = true;
+  } else if (lastdoorFlashlightHit) {
+    lastdoorFlashlightHit.hidden = true;
+  }
+
+  const bagRect = LastDoorEngine.getBagRect ? LastDoorEngine.getBagRect() : null;
+  if (lastdoorBagHit && bagRect) {
+    lastdoorBagHit.style.left = ((bagRect.x - CROP_X) / CROP_W) * 100 + "%";
+    lastdoorBagHit.style.top = ((bagRect.y - CROP_Y) / CROP_H) * 100 + "%";
+    lastdoorBagHit.style.width = (bagRect.w / CROP_W) * 100 + "%";
+    lastdoorBagHit.style.height = (bagRect.h / CROP_H) * 100 + "%";
+    lastdoorBagHit.hidden = false;
+    hasAny = true;
+  } else if (lastdoorBagHit) {
+    lastdoorBagHit.hidden = true;
+  }
+
+  const knobRect = LastDoorEngine.getKnobRect ? LastDoorEngine.getKnobRect() : null;
+  if (lastdoorKnobHit && knobRect) {
+    const pad = 0;
+
+    lastdoorKnobHit.style.left = ((knobRect.x - CROP_X - pad) / CROP_W) * 100 + "%";
+    lastdoorKnobHit.style.top = ((knobRect.y - CROP_Y - pad) / CROP_H) * 100 + "%";
+    lastdoorKnobHit.style.width = ((knobRect.w + pad * 2) / CROP_W) * 100 + "%";
+    lastdoorKnobHit.style.height = ((knobRect.h + pad * 2) / CROP_H) * 100 + "%";
+    lastdoorKnobHit.hidden = false;
+    hasAny = true;
+  } else if (lastdoorKnobHit) {
+    lastdoorKnobHit.hidden = true;
+  }
+
+  lastdoorHitLayer.hidden = !hasAny;
+}
+
 function tickHotspots() {
   updateCandleHitbox();
   updateEyehandHitbox();
   updateOxgameHitboxes();
   updateChipsHitboxes();
   updateMoonHitbox();
+  updateLastdoorHitboxes();
   requestAnimationFrame(tickHotspots);
 }
 tickHotspots();
