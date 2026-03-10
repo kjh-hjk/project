@@ -310,6 +310,50 @@ body {
   pointer-events: auto;
 }
 
+/* ===== ノブ用 円ヒットエリア ===== */
+
+#radio-channel-hit,
+#radio-volume-hit{
+  position: absolute;
+  z-index: 96;        /* ノブ画像より上 */
+  pointer-events: auto;
+  touch-action: none;
+  background: transparent;
+
+  border-radius: 50%; /* ←円！ */
+}
+
+/* チャンネルノブの円サイズ */
+#radio-channel-hit{
+  left:   calc(810px * var(--s));   /* ←中心に合わせて微調整 */
+  top:    calc(350px * var(--s));
+  width:  calc(280px * var(--s));   /* ←当たり判定の直径 */
+  height: calc(280px * var(--s));
+}
+
+/* ボリュームノブの円サイズ */
+#radio-volume-hit{
+  left:   calc(1090px * var(--s));
+  top:    calc(110px * var(--s));
+  width:  calc(275px * var(--s));
+  height: calc(275px * var(--s));
+}
+
+#radio-channel,
+#radio-volume{
+  pointer-events: none;
+}
+
+#radio-channel-hit,
+#radio-volume-hit{
+  cursor: grab;
+}
+
+#radio-channel-hit:active,
+#radio-volume-hit:active{
+  cursor: grabbing;
+}
+
 /* スイッチ（ボタンの当たり判定）
    ※位置はJSで on/off で変える（下で指示） */
 #radio-switch{

@@ -120,6 +120,8 @@ const radioBg = document.getElementById("radio-bg");
 const radioScale = document.getElementById("radio-scale");
 const radioChannel = document.getElementById("radio-channel");
 const radioVolume = document.getElementById("radio-volume");
+const radioChannelHit = document.getElementById("radio-channel-hit");
+const radioVolumeHit = document.getElementById("radio-volume-hit");
 const radioSwitchBtn = document.getElementById("radio-switch");
 const radioClose = document.getElementById("radio-close");
 const radioVolLabel = document.getElementById("radio-volume-label");
@@ -6799,7 +6801,7 @@ function setupKnobDrag(imgEl, getDeg, setDeg, onChange, speed = 1) {
 
 // チャンネル：回すと目盛り＋曲/雑音が変わる（OFFでも目盛りは動かす）
 setupKnobDrag(
-  radioChannel,
+  radioChannelHit,
   () => radioChannelDeg,
   (v) => { radioChannelDeg = v; },
   () => {
@@ -6807,12 +6809,12 @@ setupKnobDrag(
     // ONのときだけ音が変わる
     if (radioOn) playRadioAudio();
   },
-  0.45 // ← チャンネルだけゆっくり
+  0.20 // ← チャンネルだけゆっくり
 );
 
 // 音量：OFFでも回せる。表示はONのときだけ。音量はONのときだけ反映。
 setupKnobDrag(
-  radioVolume,
+  radioVolumeHit,
   () => radioVolumeDeg,
   (v) => { radioVolumeDeg = v; },
   () => {
