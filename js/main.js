@@ -8231,7 +8231,7 @@ function startIntro() {
   // 🎵 ここで再生
   if (titleBgm) {
     titleBgm.currentTime = 0;
-    titleBgm.volume = 0.7; // 好きな音量に
+    titleBgm.volume = 0.6; // 好きな音量に
     titleBgm.play().catch(() => {});
   }
 
