@@ -79,6 +79,72 @@ let moonDraggingViaHit = false;
 
 let lastdoorDraggingViaHit = false;
 
+let audioCtx = null;
+let noiseBuffer = null;
+let noiseSource = null;
+let noiseGain = null;
+
+async function loadNoiseBuffer() {
+  if (noiseBuffer) return noiseBuffer;
+
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  const res = await fetch("assets/noise.mp3");
+  const arrayBuffer = await res.arrayBuffer();
+  noiseBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+  return noiseBuffer;
+}
+
+async function startNoise() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  if (audioCtx.state === "suspended") {
+    await audioCtx.resume();
+  }
+
+  if (noiseSource) return;
+
+  const buffer = await loadNoiseBuffer();
+
+  // ここで、読み込み待ちの間にOFFになっていたら開始しない
+  if (!radioOn) return;
+
+  noiseSource = audioCtx.createBufferSource();
+  noiseSource.buffer = buffer;
+  noiseSource.loop = true;
+
+  // まずは音が変わる原因を減らすため、境界切り取りを外す
+  // 必要なら後で少しだけ戻す
+  // noiseSource.loopStart = 0.02;
+  // noiseSource.loopEnd = buffer.duration - 0.02;
+
+  noiseGain = audioCtx.createGain();
+  noiseGain.gain.value = clamp01(radioVolumeDeg / 270) * 0.85;
+
+  noiseSource.connect(noiseGain);
+  noiseGain.connect(audioCtx.destination);
+
+  noiseSource.start(0);
+}
+
+function stopNoise() {
+  if (noiseSource) {
+    noiseSource.stop();
+    noiseSource.disconnect();
+    noiseSource = null;
+  }
+
+  if (noiseGain) {
+    noiseGain.disconnect();
+    noiseGain = null;
+  }
+}
+
 // =====================
 // DOM参照
 // =====================
@@ -6670,14 +6736,24 @@ if (hitRadio) hitRadio.addEventListener("click", openRadio);
 if (radioClose) radioClose.addEventListener("click", closeRadio);
 
 function stopAllAudio() {
-  if (audioNoise) { audioNoise.pause(); audioNoise.currentTime = 0; }
-  if (audioMusic) { audioMusic.pause(); audioMusic.currentTime = 0; audioMusic.src = ""; }
+  stopNoise();
+  if (audioMusic) {
+    audioMusic.pause();
+    audioMusic.currentTime = 0;
+    audioMusic.src = "";
+  }
 }
 
 function applyVolumeToAudio() {
   const v = clamp01(radioVolumeDeg / 270);
-  if (audioNoise) audioNoise.volume = v;
-  if (audioMusic) audioMusic.volume = v;
+
+  if (noiseGain) {
+    noiseGain.gain.value = v * 0.85;;
+  }
+
+  if (audioMusic) {
+    audioMusic.volume = v;
+  }
 }
 
 function decideTuning() {
@@ -6704,60 +6780,76 @@ function decideTuning() {
 }
 
 let lastPlaying = "none"; // "none" | "noise" | "music"
+let radioAudioToken = 0;
 
-function playRadioAudio() {
+async function playRadioAudio() {
+  const token = ++radioAudioToken;
+
   if (!radioOn) {
     stopAllAudio();
     lastPlaying = "none";
+    tunedTrack = null;
     return;
   }
-
-  applyVolumeToAudio();
 
   const track = decideTuning();
   tunedTrack = track;
 
   if (track == null) {
-    // 雑音
-    if (lastPlaying !== "noise" && audioNoise) {
-      audioNoise.currentTime = 0;
+    if (audioMusic) {
+      audioMusic.pause();
+      audioMusic.currentTime = 0;
+      audioMusic.src = "";
     }
-    if (audioMusic) audioMusic.pause();
-    if (audioNoise) {
-      audioNoise.loop = true;
-      audioNoise.play().catch(() => { });
+
+    await startNoise();
+
+    // 読み込み中に状態が変わっていたら即停止
+    if (token !== radioAudioToken || !radioOn) {
+      stopNoise();
+      return;
     }
+
+    applyVolumeToAudio();
     lastPlaying = "noise";
     return;
   }
 
-  // 曲
-  if (audioNoise) audioNoise.pause();
+  stopNoise();
+
+  // 曲へ切り替わったあとに古いノイズ開始が戻ってきても無効にする
+  if (token !== radioAudioToken || !radioOn) {
+    stopAllAudio();
+    return;
+  }
 
   if (audioMusic) {
-    audioMusic.loop = true; // ✅ 曲をループ
+    audioMusic.loop = true;
     const nextSrc = "assets/" + track + ".mp3";
+
     if (!audioMusic.src.includes(nextSrc)) {
       audioMusic.src = nextSrc;
       audioMusic.currentTime = 0;
     }
-    audioMusic.play().catch(() => { });
+
+    applyVolumeToAudio();
+    audioMusic.play().catch(() => {});
   }
+
   lastPlaying = "music";
 }
 
 if (radioSwitchBtn) {
-  radioSwitchBtn.addEventListener("click", function () {
-    // 🔊 スイッチ音
-      if (radioSwitchSound) {
-        radioSwitchSound.currentTime = 0;
-        radioSwitchSound.volume = 0.8;
-        radioSwitchSound.play().catch(() => {});
-      }
+  radioSwitchBtn.addEventListener("click", async function () {
+    if (radioSwitchSound) {
+      radioSwitchSound.currentTime = 0;
+      radioSwitchSound.volume = 0.8;
+      radioSwitchSound.play().catch(() => {});
+    }
 
     radioOn = !radioOn;
     applyRadioVisuals();
-    playRadioAudio();
+    await playRadioAudio();
   });
 }
 
@@ -6827,7 +6919,9 @@ setupKnobDrag(
   () => {
     applyRadioVisuals();
     // ONのときだけ音が変わる
-    if (radioOn) playRadioAudio();
+    if (radioOn)  {
+      playRadioAudio();
+    }
   },
   0.20 // ← チャンネルだけゆっくり
 );
@@ -8106,7 +8200,7 @@ function startIntro() {
   // 🎵 ここで再生
   if (titleBgm) {
     titleBgm.currentTime = 0;
-    titleBgm.volume = 0.5; // 好きな音量に
+    titleBgm.volume = 0.7; // 好きな音量に
     titleBgm.play().catch(() => {});
   }
 
