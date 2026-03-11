@@ -272,6 +272,13 @@ preload([
   "assets/coffee_on_banner.webp",
   "assets/coffee_off_banner.webp",
 
+  "assets/book_on_blink_1.webp",
+  "assets/book_on_blink_2.webp",
+  "assets/book_on_blink_3.webp",
+  "assets/book_off_blink_1.webp",
+  "assets/book_off_blink_2.webp",
+  "assets/book_off_blink_3.webp",
+
   "assets/book_on_pageflip_1.webp",
   "assets/book_on_pageflip_2.webp",
   "assets/book_on_pageflip_3.webp",
@@ -9714,6 +9721,7 @@ function updateCandleHitbox() {
     await bookHardCutBlack(300);
     bookPage = 1;
     renderBookPage();
+
     await bookFadeFromBlack(650);
     setBookUiVisible(true);
     bookAnimating = false;
@@ -9726,6 +9734,7 @@ function updateCandleHitbox() {
     await bookHardCutBlack(300);
     bookPage = BOOK_MAX_PAGE;
     renderBookPage();
+
     await bookFadeFromBlack(650);
     setBookUiVisible(true);
     bookAnimating = false;
@@ -9777,7 +9786,7 @@ function updateCandleHitbox() {
 
     bookPage = BOOK_MAX_PAGE - 1;
     renderBookPage();
-
+  
     if (bookFadeEl) bookFadeEl.style.opacity = "0";
     playSound(blinkSound, 0.8);
     await playBlink("open");
