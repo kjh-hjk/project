@@ -19,6 +19,9 @@
 
     <img id="title" src="assets/title.webp" alt="title">
 
+    <audio id="titleBgm" src="assets/title.mp3" preload="auto"></audio>
+    <audio id="lampSound" src="assets/lamp.mp3" preload="auto"></audio>
+
     <div id="hit-layer">
       <button class="hit" id="hit-lamp" type="button"></button>
       <button class="hit" id="hit-book" type="button"></button>
@@ -40,6 +43,10 @@
 
   <!-- 背景 -->
   <img id="book-bg" alt="">
+
+  <audio id="pageLeftSound" src="assets/pageleft.mp3" preload="auto"></audio>
+<audio id="pageRightSound" src="assets/pageright.mp3" preload="auto"></audio>
+<audio id="blinkSound" src="assets/blink.mp3" preload="auto"></audio>
 
   <!-- ✅ 挿絵の固定枠（白い紙エリア） -->
   <div id="book-ill-wrap" aria-hidden="true">
@@ -157,6 +164,7 @@
 
   <!-- スイッチ（クリック） -->
   <button id="radio-switch" type="button" aria-label="radio switch"></button>
+  <audio id="radioSwitchSound" src="assets/radioswitch.mp3" preload="auto"></audio>
 
   <!-- 音量表示（ONの時だけ出す） -->
   <div id="radio-volume-label" aria-hidden="true">音量：0%</div>
@@ -165,7 +173,7 @@
   <button id="radio-close" type="button" aria-label="close"></button>
 
   <!-- 音（DOMに置いておく） -->
-  <audio id="audio-noise" src="assets/noise.mp3" loop preload="auto"></audio>
+  <audio id="audio-noise" src="assets/noise.wav" loop preload="auto"></audio>
   <audio id="audio-music" preload="auto"></audio>
 </div>
   </div>

@@ -84,6 +84,7 @@ let lastdoorDraggingViaHit = false;
 // =====================
 const titleEl = document.getElementById("title");
 const sketchEl = document.getElementById("bg-sketch");
+const titleBgm = document.getElementById("titleBgm");
 const deskEl = document.getElementById("bg-desk");
 const fadeBlackEl = document.getElementById("fade-black");
 const hitLayer = document.getElementById("hit-layer");
@@ -94,6 +95,8 @@ const hitBook = document.getElementById("hit-book");
 const hitRadio = document.getElementById("hit-radio");
 const hitCoffee = document.getElementById("hit-coffee");
 
+const lampSound = document.getElementById("lampSound");
+
 const bookScene = document.getElementById("book-scene");
 const bookBg = document.getElementById("book-bg");
 const bookClose = document.getElementById("book-close");
@@ -102,6 +105,16 @@ const bookNext = document.getElementById("book-next");
 const bookBlink = document.getElementById("book-blink");
 const bookFadeEl = document.getElementById("book-fade");
 const bookPageflip = document.getElementById("book-pageflip");
+const pageLeftSound = document.getElementById("pageLeftSound");
+const pageRightSound = document.getElementById("pageRightSound");
+const blinkSound = document.getElementById("blinkSound");
+
+function playSound(audioEl, volume = 0.8) {
+  if (!audioEl) return;
+  audioEl.currentTime = 0;
+  audioEl.volume = volume;
+  audioEl.play().catch(() => {});
+}
 
 const poemArea = document.getElementById("poem-area");
 const bookTextEl = document.getElementById("book-text");
@@ -125,7 +138,7 @@ const radioVolumeHit = document.getElementById("radio-volume-hit");
 const radioSwitchBtn = document.getElementById("radio-switch");
 const radioClose = document.getElementById("radio-close");
 const radioVolLabel = document.getElementById("radio-volume-label");
-
+const radioSwitchSound = document.getElementById("radioSwitchSound");
 const audioNoise = document.getElementById("audio-noise");
 const audioMusic = document.getElementById("audio-music");
 
@@ -6735,6 +6748,13 @@ function playRadioAudio() {
 
 if (radioSwitchBtn) {
   radioSwitchBtn.addEventListener("click", function () {
+    // 🔊 スイッチ音
+      if (radioSwitchSound) {
+        radioSwitchSound.currentTime = 0;
+        radioSwitchSound.volume = 0.8;
+        radioSwitchSound.play().catch(() => {});
+      }
+
     radioOn = !radioOn;
     applyRadioVisuals();
     playRadioAudio();
@@ -8083,6 +8103,13 @@ function startIntro() {
   started = true;
   siteStartAt = Date.now();
 
+  // 🎵 ここで再生
+  if (titleBgm) {
+    titleBgm.currentTime = 0;
+    titleBgm.volume = 0.5; // 好きな音量に
+    titleBgm.play().catch(() => {});
+  }
+
   // intro中はdesk無効
   setDeskHotspotsEnabled(false);
 
@@ -8124,6 +8151,13 @@ async function toggleLamp() {
   if (coffeeSteam) coffeeSteam.style.opacity = "0";
   if (coffeeBanner) coffeeBanner.style.display = "none";
   clearTimeout(showCoffeeBanner._t);
+
+// 🔊 ランプ音ここ！
+    if (lampSound) {
+      lampSound.currentTime = 0;
+      lampSound.volume = 0.6;
+      lampSound.play().catch(() => {});
+    }
 
   fadeBlackEl.style.opacity = "1";
   await sleep(900);
@@ -8828,6 +8862,7 @@ function isCloseCoveredByFrontItems(closeRect, ownerItemIndex, itemRects) {
 // 本：ページ描画
 // =====================
 function renderBookPage() {
+
   if (!bookBg) return;
 
   const page = PAGES[bookPage] || {};
@@ -9573,92 +9608,98 @@ function updateCandleHitbox() {
   // 本：ページ移動
   // =====================
   async function goForward() {
-    if (scene !== "book") return;
-    if (bookAnimating) return;
-    if (bookPage >= BOOK_MAX_PAGE) return;
+  if (scene !== "book") return;
+  if (bookAnimating) return;
+  if (bookPage >= BOOK_MAX_PAGE) return;
 
-    bookAnimating = true;
+  bookAnimating = true;
 
-    if (bookPage === 0) {
-      await playBlink("close");
-      await bookHardCutBlack(300);
-      bookPage = 1;
-      renderBookPage();
-      await bookFadeFromBlack(650);
-      setBookUiVisible(true);
-      bookAnimating = false;
-      return;
-    }
-
-    if (bookPage === BOOK_MAX_PAGE - 1) {
-      await playBlink("close");
-      await bookHardCutBlack(300);
-      bookPage = BOOK_MAX_PAGE;
-      renderBookPage();
-      await bookFadeFromBlack(650);
-      setBookUiVisible(true);
-      bookAnimating = false;
-      return;
-    }
-
-    await playPageflip("forward");
-    bookPage++;
+  if (bookPage === 0) {
+    playSound(blinkSound, 0.8);
+    await playBlink("close");
+    await bookHardCutBlack(300);
+    bookPage = 1;
     renderBookPage();
+    await bookFadeFromBlack(650);
     setBookUiVisible(true);
     bookAnimating = false;
+    return;
   }
+
+  if (bookPage === BOOK_MAX_PAGE - 1) {
+    playSound(blinkSound, 0.8);
+    await playBlink("close");
+    await bookHardCutBlack(300);
+    bookPage = BOOK_MAX_PAGE;
+    renderBookPage();
+    await bookFadeFromBlack(650);
+    setBookUiVisible(true);
+    bookAnimating = false;
+    return;
+  }
+
+  playSound(pageLeftSound, 0.8);
+  await playPageflip("forward");
+  bookPage++;
+  renderBookPage();
+  setBookUiVisible(true);
+  bookAnimating = false;
+}
 
   async function goBack() {
-    if (scene !== "book") return;
-    if (bookAnimating) return;
-    if (bookPage <= 0) return;
+  if (scene !== "book") return;
+  if (bookAnimating) return;
+  if (bookPage <= 0) return;
 
-    bookAnimating = true;
+  bookAnimating = true;
 
-    if (bookPage === 1) {
-      await bookFadeToBlack(650);
+  if (bookPage === 1) {
+    await bookFadeToBlack(650);
 
-      if (bookFadeEl) {
-        bookFadeEl.style.transition = "none";
-        bookFadeEl.style.opacity = "1";
-      }
-
-      bookPage = 0;
-      renderBookPage();
-
-      if (bookFadeEl) bookFadeEl.style.opacity = "0";
-      await playBlink("open");
-
-      setBookUiVisible(true);
-      bookAnimating = false;
-      return;
+    if (bookFadeEl) {
+      bookFadeEl.style.transition = "none";
+      bookFadeEl.style.opacity = "1";
     }
 
-    if (bookPage === BOOK_MAX_PAGE) {
-      await bookFadeToBlack(650);
-
-      if (bookFadeEl) {
-        bookFadeEl.style.transition = "none";
-        bookFadeEl.style.opacity = "1";
-      }
-
-      bookPage = BOOK_MAX_PAGE - 1;
-      renderBookPage();
-
-      if (bookFadeEl) bookFadeEl.style.opacity = "0";
-      await playBlink("open");
-
-      setBookUiVisible(true);
-      bookAnimating = false;
-      return;
-    }
-
-    await playPageflip("back");
-    bookPage--;
+    bookPage = 0;
     renderBookPage();
+
+    if (bookFadeEl) bookFadeEl.style.opacity = "0";
+    playSound(blinkSound, 0.8);
+    await playBlink("open");
+
     setBookUiVisible(true);
     bookAnimating = false;
+    return;
   }
+
+  if (bookPage === BOOK_MAX_PAGE) {
+    await bookFadeToBlack(650);
+
+    if (bookFadeEl) {
+      bookFadeEl.style.transition = "none";
+      bookFadeEl.style.opacity = "1";
+    }
+
+    bookPage = BOOK_MAX_PAGE - 1;
+    renderBookPage();
+
+    if (bookFadeEl) bookFadeEl.style.opacity = "0";
+    playSound(blinkSound, 0.8);
+    await playBlink("open");
+
+    setBookUiVisible(true);
+    bookAnimating = false;
+    return;
+  }
+
+  playSound(pageRightSound, 0.8);
+  await playPageflip("back");
+  bookPage--;
+  renderBookPage();
+  setBookUiVisible(true);
+  bookAnimating = false;
+}
 
   if (bookPrev) bookPrev.addEventListener("click", goForward);
   if (bookNext) bookNext.addEventListener("click", goBack);
