@@ -83,22 +83,36 @@ let audioCtx = null;
 let noiseBuffer = null;
 let noiseSource = null;
 let noiseGain = null;
+let noiseStartToken = 0;
+let noiseLoadingPromise = null;
 
 async function loadNoiseBuffer() {
   if (noiseBuffer) return noiseBuffer;
+  if (noiseLoadingPromise) return noiseLoadingPromise;
 
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
 
-  const res = await fetch("assets/noise.mp3");
-  const arrayBuffer = await res.arrayBuffer();
-  noiseBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  noiseLoadingPromise = fetch("assets/noise.mp3")
+    .then(res => res.arrayBuffer())
+    .then(arrayBuffer => audioCtx.decodeAudioData(arrayBuffer))
+    .then(decoded => {
+      noiseBuffer = decoded;
+      noiseLoadingPromise = null;
+      return decoded;
+    })
+    .catch(err => {
+      noiseLoadingPromise = null;
+      throw err;
+    });
 
-  return noiseBuffer;
+  return noiseLoadingPromise;
 }
 
 async function startNoise() {
+  const token = ++noiseStartToken;
+
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
@@ -107,34 +121,45 @@ async function startNoise() {
     await audioCtx.resume();
   }
 
+  // すでに鳴っているなら新しく作らない
   if (noiseSource) return;
 
   const buffer = await loadNoiseBuffer();
 
-  // ここで、読み込み待ちの間にOFFになっていたら開始しない
+  // 読み込み待ちの間に状態が変わっていたら中止
+  if (token !== noiseStartToken) return;
   if (!radioOn) return;
+  if (noiseSource) return;
 
-  noiseSource = audioCtx.createBufferSource();
-  noiseSource.buffer = buffer;
-  noiseSource.loop = true;
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
 
-  // まずは音が変わる原因を減らすため、境界切り取りを外す
-  // 必要なら後で少しだけ戻す
-  // noiseSource.loopStart = 0.02;
-  // noiseSource.loopEnd = buffer.duration - 0.02;
+  const gain = audioCtx.createGain();
+  gain.gain.value = clamp01(radioVolumeDeg / 270) * 0.85;
 
-  noiseGain = audioCtx.createGain();
-  noiseGain.gain.value = clamp01(radioVolumeDeg / 270) * 0.85;
+  source.connect(gain);
+  gain.connect(audioCtx.destination);
 
-  noiseSource.connect(noiseGain);
-  noiseGain.connect(audioCtx.destination);
+  source.onended = function () {
+    if (noiseSource === source) noiseSource = null;
+    if (noiseGain === gain) noiseGain = null;
+  };
 
-  noiseSource.start(0);
+  noiseSource = source;
+  noiseGain = gain;
+
+  source.start(0);
 }
 
 function stopNoise() {
+  // 進行中の startNoise を無効化
+  noiseStartToken++;
+
   if (noiseSource) {
-    noiseSource.stop();
+    try {
+      noiseSource.stop();
+    } catch (e) {}
     noiseSource.disconnect();
     noiseSource = null;
   }
@@ -205,7 +230,6 @@ const radioSwitchBtn = document.getElementById("radio-switch");
 const radioClose = document.getElementById("radio-close");
 const radioVolLabel = document.getElementById("radio-volume-label");
 const radioSwitchSound = document.getElementById("radioSwitchSound");
-const audioNoise = document.getElementById("audio-noise");
 const audioMusic = document.getElementById("audio-music");
 
 const leafwingHitLayer = document.getElementById("leafwing-hit-layer");
