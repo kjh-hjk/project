@@ -81,10 +81,46 @@ let lastdoorDraggingViaHit = false;
 
 let audioCtx = null;
 let noiseBuffer = null;
-let noiseSource = null;
+
+let noiseStartSource = null; // 最初の一発だけ
+let noiseLoopSource = null;  // その後ずっと回る
 let noiseGain = null;
+
 let noiseStartToken = 0;
 let noiseLoadingPromise = null;
+
+function softenNoiseEdges(buffer, fadeMs = 12) {
+  const sampleRate = buffer.sampleRate;
+  const fadeSamples = Math.max(1, Math.floor(sampleRate * fadeMs / 1000));
+  const channels = buffer.numberOfChannels;
+  const length = buffer.length;
+
+  // 元bufferを直接いじらず、新しいbufferを作る
+  const out = audioCtx.createBuffer(channels, length, sampleRate);
+
+  for (let ch = 0; ch < channels; ch++) {
+    const src = buffer.getChannelData(ch);
+    const dst = out.getChannelData(ch);
+
+    // まずコピー
+    dst.set(src);
+
+    // 先頭フェードイン
+    for (let i = 0; i < fadeSamples && i < length; i++) {
+      const g = i / fadeSamples;
+      dst[i] *= g;
+    }
+
+    // 末尾フェードアウト
+    for (let i = 0; i < fadeSamples && i < length; i++) {
+      const idx = length - 1 - i;
+      const g = i / fadeSamples;
+      dst[idx] *= g;
+    }
+  }
+
+  return out;
+}
 
 async function loadNoiseBuffer() {
   if (noiseBuffer) return noiseBuffer;
@@ -98,9 +134,10 @@ async function loadNoiseBuffer() {
     .then(res => res.arrayBuffer())
     .then(arrayBuffer => audioCtx.decodeAudioData(arrayBuffer))
     .then(decoded => {
-      noiseBuffer = decoded;
+      const softened = softenNoiseEdges(decoded, 12);
+      noiseBuffer = softened;
       noiseLoadingPromise = null;
-      return decoded;
+      return softened;
     })
     .catch(err => {
       noiseLoadingPromise = null;
@@ -108,6 +145,24 @@ async function loadNoiseBuffer() {
     });
 
   return noiseLoadingPromise;
+}
+
+function warmupNoise() {
+  loadNoiseBuffer().catch(() => {});
+}
+
+function cleanupNoiseSources() {
+  if (noiseStartSource) {
+    try { noiseStartSource.stop(); } catch (e) {}
+    try { noiseStartSource.disconnect(); } catch (e) {}
+    noiseStartSource = null;
+  }
+
+  if (noiseLoopSource) {
+    try { noiseLoopSource.stop(); } catch (e) {}
+    try { noiseLoopSource.disconnect(); } catch (e) {}
+    noiseLoopSource = null;
+  }
 }
 
 async function startNoise() {
@@ -121,51 +176,125 @@ async function startNoise() {
     await audioCtx.resume();
   }
 
-  // すでに鳴っているなら新しく作らない
-  if (noiseSource) return;
+  // すでに鳴っているなら何もしない
+  if (noiseGain || noiseStartSource || noiseLoopSource) return;
 
   const buffer = await loadNoiseBuffer();
 
-  // 読み込み待ちの間に状態が変わっていたら中止
+  // 読み込み中に状態が変わったら中止
   if (token !== noiseStartToken) return;
   if (!radioOn) return;
-  if (noiseSource) return;
+  if (noiseGain || noiseStartSource || noiseLoopSource) return;
 
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;
+  const now = audioCtx.currentTime;
+  const startAt = now + 0.02;
+  const target = clamp01(radioVolumeDeg / 270) * 0.85;
 
+  // 2秒ノイズ、先頭末尾10msフェード前提
+  // ループには少し余裕を持って30ms内側を使う
+  const LOOP_PAD = 0.03;
+
+  // 共通gain
   const gain = audioCtx.createGain();
-  gain.gain.value = clamp01(radioVolumeDeg / 270) * 0.85;
-
-  source.connect(gain);
+  gain.gain.cancelScheduledValues(now);
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.setValueAtTime(0, startAt);
+  gain.gain.linearRampToValueAtTime(target, startAt + 0.08);
   gain.connect(audioCtx.destination);
 
-  source.onended = function () {
-    if (noiseSource === source) noiseSource = null;
-    if (noiseGain === gain) noiseGain = null;
+  // ① 最初だけ頭から鳴らすワンショット
+  const intro = audioCtx.createBufferSource();
+  intro.buffer = buffer;
+  intro.loop = false;
+  intro.connect(gain);
+
+  // ② その後は内側だけ回すループ
+  const loop = audioCtx.createBufferSource();
+  loop.buffer = buffer;
+  loop.loop = true;
+  loop.loopStart = LOOP_PAD;
+  loop.loopEnd = Math.max(LOOP_PAD + 0.1, buffer.duration - LOOP_PAD);
+  loop.connect(gain);
+
+  intro.onended = function () {
+    if (noiseStartSource === intro) {
+      try { intro.disconnect(); } catch (e) {}
+      noiseStartSource = null;
+    }
   };
 
-  noiseSource = source;
-  noiseGain = gain;
+  loop.onended = function () {
+    if (noiseLoopSource === loop) {
+      try { loop.disconnect(); } catch (e) {}
+      noiseLoopSource = null;
+    }
+  };
 
-  source.start(0);
+  noiseGain = gain;
+  noiseStartSource = intro;
+  noiseLoopSource = loop;
+
+  // 最初は0秒から鳴らす
+  intro.start(startAt, 0);
+
+  // ループは LOOP_PAD 地点から始める
+  // 少しだけ遅らせて、開始クリックと切り分ける
+  loop.start(startAt + LOOP_PAD, LOOP_PAD);
+}
+
+function playNoiseBuffer() {
+  if (!noiseBuffer) return;
+
+  noiseSource = audioCtx.createBufferSource();
+  noiseSource.buffer = noiseBuffer;
+  noiseSource.loop = true;
+
+  noiseGain = audioCtx.createGain();
+  noiseGain.gain.value = 0.25;
+
+  noiseSource.connect(noiseGain).connect(audioCtx.destination);
+  noiseSource.start();
 }
 
 function stopNoise() {
-  // 進行中の startNoise を無効化
   noiseStartToken++;
 
-  if (noiseSource) {
+  if (noiseGain && audioCtx) {
+    const gain = noiseGain;
+    const now = audioCtx.currentTime;
+
     try {
-      noiseSource.stop();
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(0.0001, now + 0.06);
     } catch (e) {}
-    noiseSource.disconnect();
-    noiseSource = null;
+
+    const startSrc = noiseStartSource;
+    const loopSrc = noiseLoopSource;
+
+    if (startSrc) {
+      try { startSrc.stop(now + 0.06); } catch (e) {}
+    }
+    if (loopSrc) {
+      try { loopSrc.stop(now + 0.06); } catch (e) {}
+    }
+
+    setTimeout(() => {
+      cleanupNoiseSources();
+
+      if (noiseGain === gain) {
+        try { gain.disconnect(); } catch (e) {}
+        noiseGain = null;
+      }
+    }, 90);
+
+    return;
   }
 
+  cleanupNoiseSources();
+
   if (noiseGain) {
-    noiseGain.disconnect();
+    try { noiseGain.disconnect(); } catch (e) {}
     noiseGain = null;
   }
 }
@@ -6775,15 +6904,30 @@ function stopAllAudio() {
   }
 }
 
-function applyVolumeToAudio() {
+function applyVolumeToAudio(blend = null) {
   const v = clamp01(radioVolumeDeg / 270);
 
-  if (noiseGain) {
-    noiseGain.gain.value = v * 0.85;;
+  // blend未指定なら、現在のつまみ位置から計算
+  let b = blend;
+  if (b == null) {
+    b = getRadioBlend().blend;
+  }
+
+  // 少し自然に聞こえるようにカーブをつける
+  const musicLevel = v * Math.pow(b, 1.15);
+  const noiseLevel = v * 0.85 * Math.pow(1 - b, 0.85);
+
+  if (noiseGain && audioCtx) {
+    const now = audioCtx.currentTime;
+    const current = noiseGain.gain.value;
+
+    noiseGain.gain.cancelScheduledValues(now);
+    noiseGain.gain.setValueAtTime(current, now);
+    noiseGain.gain.linearRampToValueAtTime(noiseLevel, now + 0.04);
   }
 
   if (audioMusic) {
-    audioMusic.volume = v;
+    audioMusic.volume = musicLevel;
   }
 }
 
@@ -6810,7 +6954,49 @@ function decideTuning() {
   return null;
 }
 
-let lastPlaying = "none"; // "none" | "noise" | "music"
+function getRadioBlend() {
+  const x = clamp01(radioChannelDeg / 270);
+
+  const N = 10;
+  const step = 1 / (N - 1);
+
+  let nearest = 0;
+  let best = 999;
+
+  for (let i = 0; i < N; i++) {
+    const p = i * step;
+    const d = Math.abs(x - p);
+    if (d < best) {
+      best = d;
+      nearest = i;
+    }
+  }
+
+  // ここまでは「ほぼぴったり」で曲がしっかり聴こえる範囲
+  const lockTolerance = 0.018;
+
+  // ここを超えると完全にnoiseだけ
+  const fadeTolerance = 0.04;
+
+  let blend;
+  if (best <= lockTolerance) {
+    blend = 1;
+  } else if (best >= fadeTolerance) {
+    blend = 0;
+  } else {
+    // lockTolerance → fadeTolerance の間を 1 → 0 にする
+    const t = (best - lockTolerance) / (fadeTolerance - lockTolerance);
+    blend = 1 - t;
+  }
+
+  return {
+    track: nearest + 1, // 1..10
+    blend,              // 0..1  1に近いほど曲が強い
+    distance: best
+  };
+}
+
+let lastPlaying = "none"; // "none" | "noise" | "music" | "blend"
 let radioAudioToken = 0;
 
 async function playRadioAudio() {
@@ -6823,39 +7009,28 @@ async function playRadioAudio() {
     return;
   }
 
-  const track = decideTuning();
-  tunedTrack = track;
+  const info = getRadioBlend();
+  const track = info.track;
+  const blend = info.blend;
+  tunedTrack = blend > 0.98 ? track : null;
 
-  if (track == null) {
-    if (audioMusic) {
-      audioMusic.pause();
-      audioMusic.currentTime = 0;
-      audioMusic.src = "";
-    }
-
+  // まず noise 側を必要に応じて起動
+  if (blend < 0.999) {
     await startNoise();
 
-    // 読み込み中に状態が変わっていたら即停止
+    // 読み込み中に状態が変わったら中止
     if (token !== radioAudioToken || !radioOn) {
       stopNoise();
       return;
     }
-
-    applyVolumeToAudio();
-    lastPlaying = "noise";
-    return;
+  } else {
+    stopNoise();
   }
 
-  stopNoise();
-
-  // 曲へ切り替わったあとに古いノイズ開始が戻ってきても無効にする
-  if (token !== radioAudioToken || !radioOn) {
-    stopAllAudio();
-    return;
-  }
-
+  // 曲側を準備
   if (audioMusic) {
     audioMusic.loop = true;
+
     const nextSrc = "assets/" + track + ".mp3";
 
     if (!audioMusic.src.includes(nextSrc)) {
@@ -6863,11 +7038,27 @@ async function playRadioAudio() {
       audioMusic.currentTime = 0;
     }
 
-    applyVolumeToAudio();
-    audioMusic.play().catch(() => {});
+    // blend が少しでもあるなら曲を流す
+    if (blend > 0.001) {
+      try {
+        await audioMusic.play();
+      } catch (e) {}
+    } else {
+      audioMusic.pause();
+      audioMusic.currentTime = 0;
+    }
   }
 
-  lastPlaying = "music";
+  // 最後に両方の音量をblendで調整
+  applyVolumeToAudio(blend);
+
+  if (blend >= 0.999) {
+    lastPlaying = "music";
+  } else if (blend <= 0.001) {
+    lastPlaying = "noise";
+  } else {
+    lastPlaying = "blend";
+  }
 }
 
 if (radioSwitchBtn) {
@@ -6954,7 +7145,7 @@ setupKnobDrag(
       playRadioAudio();
     }
   },
-  0.20 // ← チャンネルだけゆっくり
+  0.10 // ← チャンネルだけゆっくり
 );
 
 // 音量：OFFでも回せる。表示はONのときだけ。音量はONのときだけ反映。
@@ -6968,7 +7159,8 @@ setupKnobDrag(
       applyVolumeToAudio();
       // 表示更新は applyRadioVisuals がやる
     }
-  }
+  },
+  0.7
 );
 
 
@@ -8227,6 +8419,9 @@ function startIntro() {
 
   started = true;
   siteStartAt = Date.now();
+
+  // noiseを先読み
+  warmupNoise();
 
   // 🎵 ここで再生
   if (titleBgm) {
