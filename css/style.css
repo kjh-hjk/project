@@ -172,6 +172,13 @@ body {
   height: 27.22%;
 }
 
+#hit-plant {
+  left: 9.48%;
+  top: 38.98%;
+  width: 11.35%;
+  height: 21.94%;
+}
+
 /* =====================
    Coffee FX (Overlay)
 ===================== */
@@ -232,6 +239,162 @@ body {
   white-space: pre-wrap;
 }
 
+/* =====================
+   Instruction Screen
+===================== */
+#instruction-screen {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+#instruction-paper-wrap {
+  position: relative;
+
+  height: min(92vh, 900px);
+  aspect-ratio: 850 / 1100;
+  width: auto;
+
+  max-width: 92vw;
+}
+
+#instruction-paper {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* 文字は紙の中基準 */
+#instruction-text {
+  position: absolute;
+  left: 12%;
+  top: 13%;
+  width: 80%;
+  height: 70%;
+  overflow: auto;
+
+  text-align: center;
+  color: #111;
+  line-height: 1.6;
+  font-size: clamp(12px, 0.6rem, 18px);
+  box-sizing: border-box;
+}
+
+#instruction-text p {
+  margin: 0 0 0.9em;
+}
+
+.instruction-title {
+  font-size: 1.15em;
+  font-weight: 700;
+}
+
+.instruction-section {
+  margin-top: 1.2em;
+  font-weight: 700;
+}
+
+.inline-icon {
+  height: 1em;
+  width: auto;
+  vertical-align: -0.15em;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+#instruction-start {
+  position: absolute;
+  left: 50%;
+  bottom: 11%;
+  transform: translateX(-50%);
+  padding: 0.6em 1.4em;
+  font-size: clamp(14px, 0.6rem, 20px);
+  line-height: 1;
+  border: 2px solid #111;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.92);
+  color: #111;
+  cursor: pointer;
+  font-family: "CineCaption226", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+
+#instruction-start.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* =====================
+   Instruction Popup
+===================== */
+#instruction-popup {
+  position: absolute;
+  inset: 0;
+  z-index: 99;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+#instruction-popup-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: auto;
+  height: min(92%, 980px);
+  max-width: 92%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+/* 本の close と同じ位置 */
+#instruction-popup-close {
+  position: absolute;
+  left: 86.98%;
+  top: -1.39%;
+  width: 13.02%;
+  height: 23.15%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  z-index: 100;
+
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#instruction-popup-text{
+  position: absolute;
+  left: calc(628px * var(--s));
+  top: calc(130px * var(--s));
+  width: calc(670px * var(--s));
+  height: calc(840px * var(--s));
+  overflow: auto;
+  text-align: center;
+  color: #111;
+  box-sizing: border-box;
+
+  font-size: calc(20px * var(--s));
+  line-height: 1.65;
+}
 
 /* =====================
    Radio Scene (Overlay)

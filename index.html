@@ -10,6 +10,63 @@
 <body>
 
 <div id="app">
+
+  <div id="instruction-screen">
+  <div id="instruction-paper-wrap">
+    <img id="instruction-paper" src="assets/instruction.webp" alt="instruction">
+
+    <div id="instruction-text">
+      <p class="instruction-title">
+        音と詩集：太陽フレアは陽光になりたい　へようこそ！<br>
+        進む前に注意点と遊び方を確認してね
+      </p>
+
+      <p class="instruction-section">〇注意点</p>
+
+      <p>
+        ・このサイトは音が流れます。音量に注意してね！<br>
+        ・<u>スマホ</u>で見るときは…<br>
+        <strong>⚠️画面を横向き+ブラウザを全画面表示⚠️</strong><br>
+        にすることを推奨します。<br>
+      </p>
+
+      <p><u>ブラウザを全画面表示にする方法</u></p>
+
+      <p>
+        Safari<br>
+        ①このマーク<img src="assets/safari.webp" class="inline-icon">をタップ<br>
+        ②「︙」（3点メニュー）をタップ<br>
+        ③「ツールバーを非表示」をタップ
+      </p>
+
+      <p>
+        Google Chrome<br>
+        ①「︙」（3点メニュー）もしくは共有ボタン<img src="assets/chrome.webp" class="inline-icon">をタップ<br>
+        ②「ホーム画面に追加」をタップ<br>
+        ③ホーム画面に追加されたアイコンをタップ
+      </p>
+
+      <p>これでスマホでも全画面でみれるよ！</p>
+
+      <p class="instruction-section">〇遊び方</p>
+
+      <p>
+        このサイトには、音楽と詩以外にもたくさんの仕掛けがあります！<br>
+        いろんなところを触って探してみてね。
+      </p>
+
+      <p>
+        <br>
+        このページは<u>机の上の植物に触れる</u>ともう一度確認できます。<br>
+        安心してね！<br>
+        確認出来たら下のボタンを押してね。
+      </p>
+    </div>
+
+    <button id="instruction-start" type="button">進む！</button>
+  </div>
+</div>
+
   <div id="frame">
     <div id="stage">
   <img id="bg-sketch" src="assets/sketch.webp" alt="">
@@ -28,6 +85,7 @@
       <button class="hit" id="hit-book" type="button"></button>
       <button class="hit" id="hit-radio" type="button"></button>
       <button class="hit" id="hit-coffee" type="button"></button>
+      <button id="hit-plant" class="hit" type="button" aria-label="instruction"></button>
     </div>
 
 <!-- COFFEE 演出レイヤー（最初は非表示） -->
@@ -146,6 +204,39 @@
   <button id="book-prev" type="button" aria-label="previous"></button>
   <button id="book-next" type="button" aria-label="next"></button>
   <button id="book-close" type="button" aria-label="close"></button>
+</div>
+
+<div id="instruction-popup" hidden inert>
+  <img id="instruction-popup-img" alt="instruction">
+  <div id="instruction-popup-text">
+    <p>
+      <strong>音と詩集：太陽フレアは陽光になりたい　へようこそ！</strong><br><br>
+
+      <strong>〇注意点</strong><br>
+      ・このサイトは音が流れます。音量に注意してね！<br>
+      ・<u>スマホ</u>で見るときは…<br>
+      <strong>画面を横向き+ブラウザを全画面表示</strong><br>
+      にすることを推奨します。<br><br>
+
+      <u>ブラウザを全画面表示にする方法</u><br>
+      Safari<br>
+      ①このマーク<img src="assets/safari.webp" class="inline-icon">をタップ<br>
+      ②「︙」（3点メニュー）をタップ<br>
+      ③「ツールバーを非表示」をタップ<br><br>
+
+      Google Chrome<br>
+      ①「︙」（3点メニュー）もしくは共有ボタン<img src="assets/chrome.webp" class="inline-icon">をタップ<br>
+      ②「ホーム画面に追加」をタップ<br>
+      ③ホーム画面に追加されたアイコンをタップ<br><br>
+
+      これでスマホでも全画面でみれるよ！<br><br>
+
+      <strong>〇遊び方</strong><br>
+      このサイトには、音楽と詩以外にもたくさんの仕掛けがあります！<br>
+      いろんなところを触って探してみてね。
+    </p>
+  </div>
+  <button id="instruction-popup-close" type="button" aria-label="close"></button>
 </div>
 
 <!-- RADIO画面（最初は非表示） -->

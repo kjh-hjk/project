@@ -302,6 +302,9 @@ function stopNoise() {
 // =====================
 // DOM参照
 // =====================
+const instructionScreen = document.getElementById("instruction-screen");
+const instructionText = document.getElementById("instruction-text");
+const instructionStart = document.getElementById("instruction-start");
 const titleEl = document.getElementById("title");
 const sketchEl = document.getElementById("bg-sketch");
 const titleBgm = document.getElementById("titleBgm");
@@ -314,6 +317,12 @@ const hitLamp = document.getElementById("hit-lamp");
 const hitBook = document.getElementById("hit-book");
 const hitRadio = document.getElementById("hit-radio");
 const hitCoffee = document.getElementById("hit-coffee");
+const hitPlant = document.getElementById("hit-plant");
+
+const instructionPopup = document.getElementById("instruction-popup");
+const instructionPopupImg = document.getElementById("instruction-popup-img");
+const instructionPopupClose = document.getElementById("instruction-popup-close");
+
 
 const lampSound = document.getElementById("lampSound");
 
@@ -402,6 +411,7 @@ function preload(srcList) {
 }
 
 preload([
+  "assets/instruction.webp",
   "assets/title.webp",
   "assets/sketch.webp",
   "assets/desk_on.webp",
@@ -415,6 +425,9 @@ preload([
   "assets/book_off_back.webp",
   "assets/bookradio_on_cross.webp",
   "assets/bookradio_off_cross.webp",
+
+  "assets/instruction_on.webp",
+  "assets/instruction_off.webp",
 
   "assets/coffee_on_steam_1.webp",
   "assets/coffee_on_steam_2.webp",
@@ -502,6 +515,28 @@ preload([
 // =====================
 // ユーティリティ
 // =====================
+if (instructionStart) {
+  instructionStart.addEventListener("click", () => {
+    if (instructionScreen) {
+      instructionScreen.hidden = true;
+      setInertLike(instructionScreen, true);
+    }
+  });
+}
+
+function updateInstructionStartButton() {
+  if (!instructionText || !instructionStart) return;
+
+  const scrollBottom = instructionText.scrollTop + instructionText.clientHeight;
+  const maxScroll = instructionText.scrollHeight;
+
+  if (scrollBottom >= maxScroll - 4) {
+    instructionStart.classList.add("show");
+  } else {
+    instructionStart.classList.remove("show");
+  }
+}
+
 function sleep(ms) {
   return new Promise(function (r) {
     setTimeout(r, ms);
@@ -7163,6 +7198,47 @@ setupKnobDrag(
   0.7
 );
 
+//植物
+function openInstructionPopup() {
+  if (!started || scene !== "desk") return;
+  if (!instructionPopup || !frame) return;
+
+  focusReturnEl = document.activeElement instanceof HTMLElement ? document.activeElement : hitPlant;
+
+  frame.classList.remove("interactive");
+  setDeskHotspotsEnabled(false);
+
+  instructionPopup.hidden = false;
+  setInertLike(instructionPopup, false);
+
+  if (instructionPopupImg) {
+    instructionPopupImg.src = lampOn
+      ? "assets/instruction_on.webp"
+      : "assets/instruction_off.webp";
+  }
+
+  if (instructionPopupClose) {
+    instructionPopupClose.style.backgroundImage =
+      'url("' + getAsset("bookradio", "cross") + '")';
+  }
+
+  instructionPopupClose?.focus?.();
+}
+
+function closeInstructionPopup() {
+  if (!instructionPopup || !frame) return;
+
+  evacuateFocusFrom(instructionPopup, focusReturnEl || hitPlant || document.body);
+
+  setInertLike(instructionPopup, true);
+  instructionPopup.hidden = true;
+
+  frame.classList.add("interactive");
+  setDeskHotspotsEnabled(true);
+
+  (focusReturnEl || hitPlant || document.body).focus?.();
+  focusReturnEl = null;
+}
 
 function setBookUiVisible(visible) {
   const v = visible ? "visible" : "hidden";
@@ -10090,6 +10166,20 @@ function updateCandleHitbox() {
     }, 2500);
   }
 
+if (hitPlant) {
+  hitPlant.addEventListener("click", openInstructionPopup);
+}
+
+
+//植物
+if (instructionPopupClose) {
+  instructionPopupClose.addEventListener("click", closeInstructionPopup);
+}
+
+//最初のインスト
+if (instructionText) {
+  instructionText.addEventListener("scroll", updateInstructionStartButton);
+}
   // =====================
   // 机上ホットスポット（仮）
   // =====================
