@@ -544,19 +544,6 @@ if (instructionStart) {
   });
 }
 
-function updateInstructionStartButton() {
-  if (!instructionText || !instructionStart) return;
-
-  const scrollBottom = instructionText.scrollTop + instructionText.clientHeight;
-  const maxScroll = instructionText.scrollHeight;
-
-  if (scrollBottom >= maxScroll - 4) {
-    instructionStart.classList.add("show");
-  } else {
-    instructionStart.classList.remove("show");
-  }
-}
-
 function sleep(ms) {
   return new Promise(function (r) {
     setTimeout(r, ms);
@@ -10196,10 +10183,6 @@ if (instructionPopupClose) {
   instructionPopupClose.addEventListener("click", closeInstructionPopup);
 }
 
-//最初のインスト
-if (instructionText) {
-  instructionText.addEventListener("scroll", updateInstructionStartButton);
-}
   // =====================
   // 机上ホットスポット（仮）
   // =====================

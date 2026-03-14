@@ -279,7 +279,6 @@ body {
   width: 532px;
   height: 680px;
   overflow: auto;
-
   text-align: center;
   color: #111;
   box-sizing: border-box;
@@ -328,12 +327,6 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.35s ease;
-}
-
-#instruction-start.show {
   opacity: 1;
   pointer-events: auto;
 }
