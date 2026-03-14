@@ -305,6 +305,26 @@ function stopNoise() {
 const instructionScreen = document.getElementById("instruction-screen");
 const instructionText = document.getElementById("instruction-text");
 const instructionStart = document.getElementById("instruction-start");
+
+function fitInstructionScreen() {
+  const wrap = document.getElementById("instruction-paper-wrap");
+  if (!wrap) return;
+
+  const baseW = 700;
+  const baseH = 900;
+
+  const margin = 24;
+  const availW = window.innerWidth - margin * 2;
+  const availH = window.innerHeight - margin * 2;
+
+  const scale = Math.min(availW / baseW, availH / baseH, 1);
+
+  wrap.style.setProperty("--instruction-scale", scale);
+}
+
+window.addEventListener("resize", fitInstructionScreen);
+window.addEventListener("load", fitInstructionScreen);
+
 const titleEl = document.getElementById("title");
 const sketchEl = document.getElementById("bg-sketch");
 const titleBgm = document.getElementById("titleBgm");

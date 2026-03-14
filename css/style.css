@@ -245,22 +245,20 @@ body {
 #instruction-screen {
   position: fixed;
   inset: 0;
-  background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: #565656;
   z-index: 200;
 }
 
 #instruction-paper-wrap {
-  position: relative;
-
-  height: min(92vh, 900px);
-  aspect-ratio: 850 / 1100;
-  width: auto;
-
-  max-width: 92vw;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 700px;
+  height: 900px;
+  transform: translate(-50%, -50%) scale(var(--instruction-scale, 1));
+  transform-origin: center center;
 }
+
 
 #instruction-paper {
   position: absolute;
@@ -274,20 +272,20 @@ body {
   pointer-events: none;
 }
 
-/* 文字は紙の中基準 */
 #instruction-text {
   position: absolute;
-  left: 12%;
-  top: 13%;
-  width: 80%;
-  height: 70%;
+  left: 84px;
+  top: 100px;
+  width: 532px;
+  height: 680px;
   overflow: auto;
 
   text-align: center;
   color: #111;
-  line-height: 1.6;
-  font-size: clamp(12px, 0.6rem, 18px);
   box-sizing: border-box;
+
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 #instruction-text p {
@@ -295,7 +293,7 @@ body {
 }
 
 .instruction-title {
-  font-size: 1.15em;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -315,17 +313,19 @@ body {
 #instruction-start {
   position: absolute;
   left: 50%;
-  bottom: 11%;
+  bottom: 90px;
   transform: translateX(-50%);
-  padding: 0.6em 1.4em;
-  font-size: clamp(14px, 0.6rem, 20px);
+
+  padding: 10px 22px;
+  font-size: 16px;
   line-height: 1;
+  font-family: "CineCaption226", sans-serif;
+
   border: 2px solid #111;
   border-radius: 999px;
   background: rgba(255,255,255,0.92);
   color: #111;
   cursor: pointer;
-  font-family: "CineCaption226", sans-serif;
   -webkit-tap-highlight-color: transparent;
 
   opacity: 0;
