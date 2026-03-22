@@ -245,18 +245,35 @@ body {
 #instruction-screen {
   position: fixed;
   inset: 0;
+  z-index: 9999;
+
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+
   background: #565656;
-  z-index: 200;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 #instruction-paper-wrap {
-  position: absolute;
-  left: 50%;
-  top: 50%;
+  position: relative;
   width: 700px;
   height: 900px;
-  transform: translate(-50%, -50%) scale(var(--instruction-scale, 1));
+  flex: 0 0 auto;
+
+  transform: scale(var(--instruction-scale, 1));
   transform-origin: center center;
+
+  overflow: visible;
+}
+
+/* 念のため */
+#title,
+#bg-sketch {
+  z-index: 1;
 }
 
 

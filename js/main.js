@@ -306,24 +306,117 @@ const instructionScreen = document.getElementById("instruction-screen");
 const instructionText = document.getElementById("instruction-text");
 const instructionStart = document.getElementById("instruction-start");
 
-function fitInstructionScreen() {
+let introPinching = false;
+let lastIntroOrientation = "";
+
+function getIntroOrientation() {
+  return window.innerWidth > window.innerHeight ? "landscape" : "portrait";
+}
+
+function fitInstructionScreen(force = false) {
   const wrap = document.getElementById("instruction-paper-wrap");
   if (!wrap) return;
 
+  // ピンチ中は再計算しない
+  if (!force && introPinching) return;
+
+  const isLandscapePhone =
+    window.matchMedia("(orientation: landscape)").matches &&
+    window.matchMedia("(pointer: coarse)").matches;
+
   const baseW = 700;
   const baseH = 900;
+  const margin = isLandscapePhone ? 12 : 24;
 
-  const margin = 24;
   const availW = window.innerWidth - margin * 2;
   const availH = window.innerHeight - margin * 2;
 
   const scale = Math.min(availW / baseW, availH / baseH, 1);
 
   wrap.style.setProperty("--instruction-scale", scale);
+  lastIntroOrientation = getIntroOrientation();
 }
 
-window.addEventListener("resize", fitInstructionScreen);
-window.addEventListener("load", fitInstructionScreen);
+// 2本指以上ならピンチ中フラグON
+document.addEventListener("touchstart", (e) => {
+  if (!instructionScreen || instructionScreen.hidden) return;
+  if (e.touches && e.touches.length >= 2) {
+    introPinching = true;
+  }
+}, { passive: true });
+
+// 指が1本以下に戻ったらピンチ終了 → その時だけ再fit
+document.addEventListener("touchend", (e) => {
+  if (!instructionScreen || instructionScreen.hidden) return;
+  if (!e.touches || e.touches.length < 2) {
+    introPinching = false;
+    requestAnimationFrame(() => fitInstructionScreen(true));
+  }
+}, { passive: true });
+
+document.addEventListener("touchcancel", () => {
+  if (!instructionScreen || instructionScreen.hidden) return;
+  introPinching = false;
+  requestAnimationFrame(() => fitInstructionScreen(true));
+}, { passive: true });
+
+// resizeでは毎回再fitしない
+window.addEventListener("resize", () => {
+  const nowOrientation = getIntroOrientation();
+
+  // 向きが変わった時だけ再fit
+  if (nowOrientation !== lastIntroOrientation) {
+    requestAnimationFrame(() => fitInstructionScreen(true));
+  }
+});
+
+let introSingleTouchLock = false;
+
+function lockIntroViewport() {
+  document.documentElement.style.overflow = "hidden";
+  document.body.style.overflow = "hidden";
+}
+
+function unlockIntroViewport() {
+  document.documentElement.style.overflow = "";
+  document.body.style.overflow = "";
+}
+
+lockIntroViewport();
+
+if (instructionScreen) {
+  instructionScreen.addEventListener("touchstart", (e) => {
+    introSingleTouchLock = (e.touches.length === 1);
+  }, { passive: true });
+
+  instructionScreen.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 1 && introSingleTouchLock) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  instructionScreen.addEventListener("touchend", (e) => {
+    introSingleTouchLock = (e.touches.length === 1);
+  }, { passive: true });
+
+  instructionScreen.addEventListener("touchcancel", () => {
+    introSingleTouchLock = false;
+  }, { passive: true });
+}
+
+if (instructionStart) {
+  instructionStart.addEventListener("click", () => {
+    if (instructionScreen) {
+      instructionScreen.hidden = true;
+      setInertLike(instructionScreen, true);
+    }
+    unlockIntroViewport();
+  });
+}
+
+window.addEventListener("load", () => {
+  fitInstructionScreen(true);
+});
 
 const titleEl = document.getElementById("title");
 const sketchEl = document.getElementById("bg-sketch");
@@ -345,6 +438,8 @@ const instructionPopupClose = document.getElementById("instruction-popup-close")
 
 
 const lampSound = document.getElementById("lampSound");
+const coffeeSound = document.getElementById("coffeeSound");
+const plantSound = document.getElementById("plantSound");
 
 const bookScene = document.getElementById("book-scene");
 const bookBg = document.getElementById("book-bg");
@@ -7247,6 +7342,21 @@ function closeInstructionPopup() {
   focusReturnEl = null;
 }
 
+if (hitPlant) {
+  hitPlant.addEventListener("click", () => {
+    playSound(plantSound, 0.7);
+    openInstructionPopup();
+  });
+}
+
+if (instructionPopupClose) {
+  instructionPopupClose.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeInstructionPopup();
+  });
+}
+
 function setBookUiVisible(visible) {
   const v = visible ? "visible" : "hidden";
   if (bookPrev) bookPrev.style.visibility = v;
@@ -7263,7 +7373,7 @@ function setDeskHotspotsEnabled(enabled) {
   }
   hitLayer.style.pointerEvents = enabled ? "auto" : "none";
 
-  const buttons = [hitLamp, hitBook, hitRadio, hitCoffee];
+  const buttons = [hitLamp, hitBook, hitRadio, hitCoffee, hitPlant];
   for (let i = 0; i < buttons.length; i++) {
     const b = buttons[i];
     if (!b) continue;
@@ -10121,6 +10231,8 @@ function updateCandleHitbox() {
 
     if (!coffeeSteam || !coffeeBanner || !coffeeBannerImg || !coffeeBannerText) return;
 
+    playSound(coffeeSound, 0.8);
+
     const elapsedMs = Date.now() - (siteStartAt ? siteStartAt : Date.now());
     const elapsedMin = elapsedMs / 60000;
 
@@ -10173,14 +10285,13 @@ function updateCandleHitbox() {
     }, 2500);
   }
 
-if (hitPlant) {
-  hitPlant.addEventListener("click", openInstructionPopup);
-}
-
 
 //植物
-if (instructionPopupClose) {
-  instructionPopupClose.addEventListener("click", closeInstructionPopup);
+if (hitPlant) {
+  hitPlant.addEventListener("click", () => {
+    playSound(plantSound, 0.8);
+    openInstructionPopup();
+  });
 }
 
   // =====================
