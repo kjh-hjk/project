@@ -314,29 +314,22 @@ function getIntroOrientation() {
   return window.innerWidth > window.innerHeight ? "landscape" : "portrait";
 }
 
-function fitInstructionScreen(force = false) {
-  const wrap = document.getElementById("instruction-paper-wrap");
-  if (!wrap) return;
+function fitInstructionHero() {
+  const root = document.documentElement;
+  const baseW = 1920;
+  const baseH = 1080;
 
-  // ピンチ中は再計算しない
-  if (!force && introPinching) return;
+  const scale = Math.min(
+    window.innerWidth / baseW,
+    window.innerHeight / baseH
+  );
 
-  const isLandscapePhone =
-    window.matchMedia("(orientation: landscape)").matches &&
-    window.matchMedia("(pointer: coarse)").matches;
-
-  const baseW = 700;
-  const baseH = 900;
-  const margin = isLandscapePhone ? 12 : 24;
-
-  const availW = window.innerWidth - margin * 2;
-  const availH = window.innerHeight - margin * 2;
-
-  const scale = Math.min(availW / baseW, availH / baseH, 1);
-
-  wrap.style.setProperty("--instruction-scale", scale);
-  lastIntroOrientation = getIntroOrientation();
+  root.style.setProperty("--s", scale);
 }
+
+window.addEventListener("resize", fitInstructionHero);
+window.addEventListener("orientationchange", fitInstructionHero);
+window.addEventListener("load", fitInstructionHero);
 
 function lockIntroViewport() {
   document.documentElement.style.overflow = "hidden";
