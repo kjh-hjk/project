@@ -308,6 +308,7 @@ const instructionStart = document.getElementById("instruction-start");
 
 let introPinching = false;
 let lastIntroOrientation = "";
+let introSingleTouchLock = false;
 
 function getIntroOrientation() {
   return window.innerWidth > window.innerHeight ? "landscape" : "portrait";
@@ -337,41 +338,6 @@ function fitInstructionScreen(force = false) {
   lastIntroOrientation = getIntroOrientation();
 }
 
-// 2本指以上ならピンチ中フラグON
-document.addEventListener("touchstart", (e) => {
-  if (!instructionScreen || instructionScreen.hidden) return;
-  if (e.touches && e.touches.length >= 2) {
-    introPinching = true;
-  }
-}, { passive: true });
-
-// 指が1本以下に戻ったらピンチ終了 → その時だけ再fit
-document.addEventListener("touchend", (e) => {
-  if (!instructionScreen || instructionScreen.hidden) return;
-  if (!e.touches || e.touches.length < 2) {
-    introPinching = false;
-    requestAnimationFrame(() => fitInstructionScreen(true));
-  }
-}, { passive: true });
-
-document.addEventListener("touchcancel", () => {
-  if (!instructionScreen || instructionScreen.hidden) return;
-  introPinching = false;
-  requestAnimationFrame(() => fitInstructionScreen(true));
-}, { passive: true });
-
-// resizeでは毎回再fitしない
-window.addEventListener("resize", () => {
-  const nowOrientation = getIntroOrientation();
-
-  // 向きが変わった時だけ再fit
-  if (nowOrientation !== lastIntroOrientation) {
-    requestAnimationFrame(() => fitInstructionScreen(true));
-  }
-});
-
-let introSingleTouchLock = false;
-
 function lockIntroViewport() {
   document.documentElement.style.overflow = "hidden";
   document.body.style.overflow = "hidden";
@@ -387,6 +353,10 @@ lockIntroViewport();
 if (instructionScreen) {
   instructionScreen.addEventListener("touchstart", (e) => {
     introSingleTouchLock = (e.touches.length === 1);
+
+    if (e.touches.length >= 2) {
+      introPinching = true;
+    }
   }, { passive: true });
 
   instructionScreen.addEventListener("touchmove", (e) => {
@@ -395,14 +365,26 @@ if (instructionScreen) {
     }
   }, { passive: false });
 
-  instructionScreen.addEventListener("touchend", (e) => {
-    introSingleTouchLock = (e.touches.length === 1);
+  document.addEventListener("touchend", (e) => {
+    if (!instructionScreen || instructionScreen.hidden) return;
+
+    introSingleTouchLock = (e.touches && e.touches.length === 1);
+
+    if (!e.touches || e.touches.length < 2) {
+      introPinching = false;
+    }
   }, { passive: true });
 
-  instructionScreen.addEventListener("touchcancel", () => {
+  document.addEventListener("touchcancel", () => {
+    if (!instructionScreen || instructionScreen.hidden) return;
+    introPinching = false;
     introSingleTouchLock = false;
   }, { passive: true });
 }
+
+window.addEventListener("orientationchange", () => {
+  requestAnimationFrame(() => fitInstructionScreen(true));
+});
 
 if (instructionStart) {
   instructionStart.addEventListener("click", () => {
