@@ -303,33 +303,27 @@ function stopNoise() {
 // DOM参照
 // =====================
 const instructionScreen = document.getElementById("instruction-screen");
-const instructionText = document.getElementById("instruction-text");
 const instructionStart = document.getElementById("instruction-start");
 
-let introPinching = false;
-let lastIntroOrientation = "";
 let introSingleTouchLock = false;
 
-function getIntroOrientation() {
-  return window.innerWidth > window.innerHeight ? "landscape" : "portrait";
-}
-
 function fitInstructionHero() {
-  const root = document.documentElement;
+  const hero = document.getElementById("instruction-hero");
+  if (!hero) return;
+
   const baseW = 1920;
   const baseH = 1080;
 
-  const scale = Math.min(
-    window.innerWidth / baseW,
-    window.innerHeight / baseH
-  );
+  const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
 
-  root.style.setProperty("--s", scale);
+  const baseScale = Math.min(vw / baseW, vh / baseH);
+
+  const isPortrait = vh > vw;
+  const portraitBoost = isPortrait ? 1.8 : 1;
+
+  hero.style.setProperty("--intro-scale", baseScale * portraitBoost);
 }
-
-window.addEventListener("resize", fitInstructionHero);
-window.addEventListener("orientationchange", fitInstructionHero);
-window.addEventListener("load", fitInstructionHero);
 
 function lockIntroViewport() {
   document.documentElement.style.overflow = "hidden";
@@ -346,10 +340,6 @@ lockIntroViewport();
 if (instructionScreen) {
   instructionScreen.addEventListener("touchstart", (e) => {
     introSingleTouchLock = (e.touches.length === 1);
-
-    if (e.touches.length >= 2) {
-      introPinching = true;
-    }
   }, { passive: true });
 
   instructionScreen.addEventListener("touchmove", (e) => {
@@ -360,23 +350,20 @@ if (instructionScreen) {
 
   document.addEventListener("touchend", (e) => {
     if (!instructionScreen || instructionScreen.hidden) return;
-
-    introSingleTouchLock = (e.touches && e.touches.length === 1);
-
-    if (!e.touches || e.touches.length < 2) {
-      introPinching = false;
-    }
+    introSingleTouchLock = !!(e.touches && e.touches.length === 1);
   }, { passive: true });
 
   document.addEventListener("touchcancel", () => {
     if (!instructionScreen || instructionScreen.hidden) return;
-    introPinching = false;
     introSingleTouchLock = false;
   }, { passive: true });
 }
 
+window.addEventListener("load", fitInstructionHero);
+
 window.addEventListener("orientationchange", () => {
-  requestAnimationFrame(() => fitInstructionScreen(true));
+  setTimeout(fitInstructionHero, 150);
+  setTimeout(fitInstructionHero, 400);
 });
 
 if (instructionStart) {
@@ -388,10 +375,6 @@ if (instructionStart) {
     unlockIntroViewport();
   });
 }
-
-window.addEventListener("load", () => {
-  fitInstructionScreen(true);
-});
 
 const titleEl = document.getElementById("title");
 const sketchEl = document.getElementById("bg-sketch");

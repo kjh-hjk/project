@@ -254,9 +254,10 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: calc(1920px * var(--s));
-  height: calc(1080px * var(--s));
-  transform: translate(-50%, -50%);
+  width: 1920px;
+  height: 1080px;
+  transform: translate(-50%, -50%) scale(var(--intro-scale, 1));
+  transform-origin: center center;
 }
 
 #instruction-paper {
@@ -273,10 +274,10 @@ body {
 
 #instruction-start {
   position: absolute;
-  left: calc(870px * var(--s));
-  top: calc(950px * var(--s));
-  width: calc(200px * var(--s));
-  height: calc(75px * var(--s));
+  left: 870px;
+  top: 945px;
+  width: 200px;
+  height: 80px;
   background: transparent;
   border: 0;
 }
