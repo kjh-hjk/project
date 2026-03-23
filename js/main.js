@@ -86,6 +86,9 @@ let noiseStartSource = null; // 最初の一発だけ
 let noiseLoopSource = null;  // その後ずっと回る
 let noiseGain = null;
 
+let musicSourceNode = null;
+let musicGain = null;
+
 let noiseStartToken = 0;
 let noiseLoadingPromise = null;
 
@@ -6990,8 +6993,38 @@ function closeRadio() {
 if (hitRadio) hitRadio.addEventListener("click", openRadio);
 if (radioClose) radioClose.addEventListener("click", closeRadio);
 
+function ensureMusicGraph() {
+  if (!audioMusic) return;
+
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  if (!musicSourceNode) {
+    musicSourceNode = audioCtx.createMediaElementSource(audioMusic);
+  }
+
+  if (!musicGain) {
+    musicGain = audioCtx.createGain();
+    musicGain.gain.value = 1;
+
+    musicSourceNode.connect(musicGain);
+    musicGain.connect(audioCtx.destination);
+  }
+}
+
 function stopAllAudio() {
   stopNoise();
+
+  if (musicGain && audioCtx) {
+    const now = audioCtx.currentTime;
+    try {
+      musicGain.gain.cancelScheduledValues(now);
+      musicGain.gain.setValueAtTime(musicGain.gain.value, now);
+      musicGain.gain.linearRampToValueAtTime(0.0001, now + 0.06);
+    } catch (e) {}
+  }
+
   if (audioMusic) {
     audioMusic.pause();
     audioMusic.currentTime = 0;
@@ -7008,8 +7041,8 @@ function applyVolumeToAudio(blend = null) {
     b = getRadioBlend().blend;
   }
 
-  // 少し自然に聞こえるようにカーブをつける
-  const musicLevel = v * Math.pow(b, 1.15);
+  // 曲はノブ値そのまま、noiseはチャンネルずれで増える
+  const musicLevel = v;
   const noiseLevel = v * 0.85 * Math.pow(1 - b, 0.85);
 
   if (noiseGain && audioCtx) {
@@ -7022,7 +7055,16 @@ function applyVolumeToAudio(blend = null) {
   }
 
   if (audioMusic) {
-    audioMusic.volume = musicLevel;
+    ensureMusicGraph();
+
+    if (musicGain && audioCtx) {
+      const now = audioCtx.currentTime;
+      const current = musicGain.gain.value;
+
+      musicGain.gain.cancelScheduledValues(now);
+      musicGain.gain.setValueAtTime(current, now);
+      musicGain.gain.linearRampToValueAtTime(musicLevel, now + 0.04);
+    }
   }
 }
 
@@ -7124,6 +7166,7 @@ async function playRadioAudio() {
 
   // 曲側を準備
   if (audioMusic) {
+    ensureMusicGraph();
     audioMusic.loop = true;
 
     const nextSrc = "assets/" + track + ".mp3";
